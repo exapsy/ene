@@ -1,0 +1,248 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "const": "e2e_test:v1"
+    },
+    "name": {
+      "type": "string"
+    },
+    "units": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "mongo",
+              "http"
+            ]
+          },
+          "image": {
+            "type": "string"
+          },
+          "dockerfile": {
+            "type": "string"
+          },
+          "env_file": {
+            "type": "string"
+          },
+          "cmd": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "healthcheck": {
+            "type": "string",
+            "nullable": true
+          },
+          "app_port": {
+            "type": "integer",
+            "nullable": true
+          },
+          "env": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "startup_timeout": {
+            "type": "string",
+            "description": "optional startup timeout for the unit"
+          }
+        },
+        "if": {
+          "properties": {
+            "kind": {
+              "const": "mongo"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "migrations": {
+              "type": "string",
+              "description": "The path to the migrations js file."
+            }
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "kind",
+          "app_port"
+        ]
+      }
+    },
+    "target": {
+      "type": "string",
+      "description": "The name of the target unit to run the tests against. This is used to determine which unit to run the tests against."
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "oneOf": [
+              {
+                "const": "http"
+              }
+            ]
+          },
+          "timeout": {
+            "type": "string"
+          },
+          "request": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "GET",
+                  "POST",
+                  "PUT",
+                  "DELETE",
+                  "PATCH",
+                  "HEAD",
+                  "OPTIONS"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "body": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "form"
+                    ]
+                  },
+                  "data": {
+                    "type": "object"
+                  }
+                }
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "path"
+            ]
+          },
+          "expect": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "body_assertions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "equals": {
+                      "type": "string"
+                    },
+                    "not_equals": {
+                      "type": "string"
+                    },
+                    "contains": {
+                      "type": "string"
+                    },
+                    "not_contains": {
+                      "type": "string"
+                    },
+                    "matches": {
+                      "type": "string"
+                    },
+                    "not_matches": {
+                      "type": "string"
+                    },
+                    "present": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              },
+              "header_assertions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "equals": {
+                      "type": "string"
+                    },
+                    "not_equals": {
+                      "type": "string"
+                    },
+                    "contains": {
+                      "type": "string"
+                    },
+                    "not_contains": {
+                      "type": "string"
+                    },
+                    "matches": {
+                      "type": "string"
+                    },
+                    "not_matches": {
+                      "type": "string"
+                    },
+                    "present": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "request",
+          "expect"
+        ]
+      }
+    }
+  },
+  "required": [
+    "kind",
+    "name",
+    "units",
+    "target",
+    "tests"
+  ],
+  "additionalProperties": false
+}
