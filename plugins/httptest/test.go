@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/exapsy/ene/e2eframe"
 	"gopkg.in/yaml.v3"
-	"microservice-var/cmd/e2e/e2eframe"
 )
 
 const (

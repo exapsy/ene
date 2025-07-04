@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	httpplugin "github.com/exapsy/ene/plugins/httpunit"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -44,7 +45,7 @@ func TestHTTPUnit_FullFlow(t *testing.T) {
 FROM python:3.11-slim
 EXPOSE 8080
 CMD ["python3","-m","http.server","8080"]
-`), 0644)
+`), 0o644)
 	if err != nil {
 		t.Fatalf("write Dockerfile: %v", err)
 	}
@@ -64,7 +65,7 @@ CMD ["python3","-m","http.server","8080"]
 	assert.Equal(t, "pyhttp", u.Name())
 
 	// start container and wait for the server to respond
-	assert.NoError(t, u.Start(ctx))
+	assert.NoError(t, u.Start(ctx, nil))
 	assert.NoError(t, u.WaitForReady(ctx))
 
 	// endpoint should include localhost

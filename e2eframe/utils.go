@@ -3,7 +3,6 @@ package e2eframe
 import (
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"regexp"
 )
@@ -43,33 +42,6 @@ func InterpolateEnvs(services []Unit, envCfg map[string]any) error {
 	}
 
 	return nil
-}
-
-const (
-	RandomDHEsotericServiceHealthcheckURI = "http://ms-orders-v2.efood.staging.aws/v1/health"
-)
-
-func IsConnectedToDhVPN() bool {
-	// Ping an esoteric service
-	req, err := http.NewRequest(http.MethodGet, RandomDHEsotericServiceHealthcheckURI, nil)
-	if err != nil {
-		return false
-	}
-
-	client := &http.Client{}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return false
-	}
-
-	return true
 }
 
 // GetFreePort asks the kernel for a free open port that is ready to use.

@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/exapsy/ene/e2eframe"
 	"github.com/tidwall/gjson"
-	"microservice-var/cmd/e2e/e2eframe"
 )
 
 type TestBodyAssert struct {

@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"microservice-var/cmd/e2e/e2eframe"
+	"github.com/exapsy/ene/e2eframe"
 )
 
 type TestHeaderAssert struct {

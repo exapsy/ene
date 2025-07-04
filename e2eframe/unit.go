@@ -37,6 +37,12 @@ type UnitStartOptions struct {
 	Fixtures []Fixture
 	// EventSink is a channel to send events to.
 	EventSink EventSink
+	// WorkingDir is the base directory
+	WorkingDir string
+}
+
+type GetEnvRawOptions struct {
+	WorkingDir string
 }
 
 type Unit interface {
@@ -63,7 +69,7 @@ type Unit interface {
 
 	// GetEnvRaw returns the environment variables for the service,
 	// but pre-processed without any interpolation.
-	GetEnvRaw() map[string]string
+	GetEnvRaw(opts *GetEnvRawOptions) map[string]string
 
 	// SetEnvs sets the environment variables for the service.
 	SetEnvs(env map[string]string)

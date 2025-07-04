@@ -13,11 +13,11 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
+	"github.com/exapsy/ene/e2eframe"
 	"github.com/joho/godotenv"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"gopkg.in/yaml.v3"
-	"microservice-var/cmd/e2e/e2eframe"
 )
 
 const (
@@ -198,11 +198,12 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 
 	var err error
 	if s.EnvFile != "" {
-		if err := godotenv.Load(s.EnvFile); err != nil {
+		envFile := filepath.Join(opts.WorkingDir, s.EnvFile)
+		if err := godotenv.Load(envFile); err != nil {
 			return fmt.Errorf("could not load env file: %w", err)
 		}
 
-		envs, err = godotenv.Read(s.EnvFile)
+		envs, err = godotenv.Read(envFile)
 		if err != nil {
 			return fmt.Errorf("could not read env file: %w", err)
 		}
@@ -224,8 +225,17 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 		}
 	}
 
-	dockerfileDir := filepath.Dir(s.Dockerfile)
-	dockerfileName := filepath.Base(s.Dockerfile)
+	dockerfileDir := filepath.Join(opts.WorkingDir)
+	dockerfileDir, err = filepath.Abs(dockerfileDir)
+	if err != nil {
+		return fmt.Errorf("get absolute path of dockerfile directory: %w", err)
+	}
+
+	cwd, err := os.Getwd()
+	dockerBaseDir, err := filepath.Rel(cwd, dockerfileDir)
+	if err != nil {
+		return fmt.Errorf("get relative path of dockerfile directory: %w", err)
+	}
 
 	var buildLogWriter io.Writer
 
@@ -247,8 +257,8 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 	var fromDockerfile testcontainers.FromDockerfile
 	if s.Dockerfile != "" {
 		fromDockerfile = testcontainers.FromDockerfile{
-			Context:        dockerfileDir,
-			Dockerfile:     dockerfileName,
+			Context:        dockerBaseDir,
+			Dockerfile:     s.Dockerfile,
 			BuildLogWriter: buildLogWriter,
 		}
 		if opts.CacheImages {
@@ -269,9 +279,9 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 
 	s.Port = freePort
 	exposedPort := fmt.Sprintf("%d", freePort)
-	//exposedPortNat := nat.Port(fmt.Sprintf("%s/tcp", exposedPort))
+	// exposedPortNat := nat.Port(fmt.Sprintf("%s/tcp", exposedPort))
 
-	//appPortStr := fmt.Sprintf("%d", s.AppPort)
+	// appPortStr := fmt.Sprintf("%d", s.AppPort)
 	appPortStrNat := fmt.Sprintf("%d/tcp", s.AppPort)
 	appPortNat := nat.Port(appPortStrNat)
 
@@ -372,6 +382,7 @@ func (s *HTTPUnit) WaitForReady(ctx context.Context) error {
 		}
 	}
 }
+
 func (s *HTTPUnit) Stop() error {
 	if s.cont != nil {
 		return s.cont.Terminate(context.Background())
@@ -399,15 +410,16 @@ func (s *HTTPUnit) Get(variable string) (string, error) {
 	}
 }
 
-func (s *HTTPUnit) GetEnvRaw() map[string]string {
+func (s *HTTPUnit) GetEnvRaw(opts *e2eframe.GetEnvRawOptions) map[string]string {
 	envs := make(map[string]string)
 
 	if s.EnvFile != "" {
-		if err := godotenv.Load(s.EnvFile); err != nil {
+		envFilePath := filepath.Join(opts.WorkingDir, s.EnvFile)
+		if err := godotenv.Load(envFilePath); err != nil {
 			return nil
 		}
 
-		envs, _ = godotenv.Read(s.EnvFile)
+		envs, _ = godotenv.Read(envFilePath)
 	}
 
 	for key, value := range s.EnvVars {

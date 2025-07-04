@@ -103,9 +103,13 @@ func LoadTestSuite(path string) (TestSuite, error) {
 			return nil, err
 		}
 
-		base := filepath.Dir(path)
+		suitePath := filepath.Dir(path)
+		workingDir := filepath.Join(suitePath, "../../")
 
-		params := CreateSuiteParams{RelativePath: base}
+		params := CreateSuiteParams{
+			RelativePath: suitePath,
+			WorkingDir:   workingDir,
+		}
 
 		testSuite, err := testSuiteConfig.CreateTestSuite(params)
 		if err != nil {
@@ -118,8 +122,14 @@ func LoadTestSuite(path string) (TestSuite, error) {
 	return nil, fmt.Errorf("unrecognized test suite kind: %s", config.Kind)
 }
 
-func LoadTestSuites() ([]TestSuite, error) {
-	testsDir, err := os.ReadDir(TestsDir)
+func LoadTestSuites(baseDir string) ([]TestSuite, error) {
+	if baseDir == "" {
+		baseDir, _ = os.Getwd() // Get current working directory if no baseDir is provided
+	}
+
+	testsDirPath := filepath.Join(baseDir, TestsDir)
+
+	testsDir, err := os.ReadDir(testsDirPath)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +137,7 @@ func LoadTestSuites() ([]TestSuite, error) {
 	var testSuites []TestSuite
 
 	for _, testDir := range testsDir {
-		testDirPath := filepath.Join(TestsDir, testDir.Name())
+		testDirPath := filepath.Join(testsDirPath, testDir.Name())
 
 		testFiles, err := os.ReadDir(testDirPath)
 		if err != nil {
@@ -165,12 +175,13 @@ type RunOpts struct {
 	MaxRetries int    // Number of retries for failed tests
 	RetryDelay string // Delay between retries (e.g. "2s")
 	Debug      bool   // Enable debug mode
+	BaseDir    string // Base directory for test suites
 }
 
 func Run(ctx context.Context, opts *RunOpts) error {
 	var err error
 
-	testSuites, err := LoadTestSuites()
+	testSuites, err := LoadTestSuites(opts.BaseDir)
 	if err != nil {
 		return fmt.Errorf("load test suites: %w", err)
 	}
@@ -200,8 +211,8 @@ func Run(ctx context.Context, opts *RunOpts) error {
 	go func() {
 		defer close(testResults)
 
-		//runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		//defer cancel()
+		// runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		// defer cancel()
 		runCtx := ctx
 
 		done := make(chan struct{})
@@ -261,6 +272,7 @@ func runTestsInParallel(
 				MaxRetries: opts.MaxRetries,
 				RetryDelay: opts.RetryDelay,
 				Debug:      opts.Debug,
+				BaseDir:    opts.BaseDir,
 			})
 			if err != nil {
 				events <- &BaseEvent{
@@ -305,6 +317,7 @@ func runTestsSequentially(
 			MaxRetries: opts.MaxRetries,
 			RetryDelay: opts.RetryDelay,
 			Debug:      opts.Debug,
+			BaseDir:    opts.BaseDir,
 		})
 		if err != nil {
 			events <- &BaseEvent{

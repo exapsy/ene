@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/exapsy/ene/e2eframe"
 	"gopkg.in/yaml.v3"
-	"microservice-var/cmd/e2e/e2eframe"
 )
 
 const (
@@ -204,7 +204,7 @@ func (u *Unit) Get(_ string) (string, error) {
 	return "", nil
 }
 
-func (u *Unit) GetEnvRaw() map[string]string {
+func (u *Unit) GetEnvRaw(_ *e2eframe.GetEnvRawOptions) map[string]string {
 	return map[string]string{}
 }
 

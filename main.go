@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/exapsy/ene/e2eframe"
+	_ "github.com/exapsy/ene/plugins/httpmockunit"
+	_ "github.com/exapsy/ene/plugins/httptest"
+	_ "github.com/exapsy/ene/plugins/httpunit"
+	_ "github.com/exapsy/ene/plugins/mongounit"
 	"github.com/spf13/cobra"
-	"microservice-var/cmd/e2e/e2eframe"
-	_ "microservice-var/cmd/e2e/plugins/httpmockunit"
-	_ "microservice-var/cmd/e2e/plugins/httptest"
-	_ "microservice-var/cmd/e2e/plugins/httpunit"
-	_ "microservice-var/cmd/e2e/plugins/mongounit"
 )
 
 var (
@@ -43,6 +43,7 @@ var rootCmd = &cobra.Command{
 		suitesFilter := strings.Split(suiteFlag, ",")
 		htmlReportPath := cmd.Flag("html").Value.String()
 		jsonReportPath := cmd.Flag("json").Value.String()
+		baseDir := cmd.Flag("base-dir").Value.String()
 
 		isVerbose := verbose == "true"
 		isPretty := pretty == "true"
@@ -64,15 +65,6 @@ var rootCmd = &cobra.Command{
 			return false
 		}
 
-		if e2eframe.IsConnectedToDhVPN() == false {
-			fmt.Printf(
-				"%s%s⚠️  WARNING%s: Not connected to DeliveryHero VPN. Some services may not work properly.\n\n",
-				colorBold,
-				colorYellow,
-				colorReset,
-			)
-		}
-
 		// Collect test results
 		eventChan := e2eframe.NewEventChannel()
 		var eventSink e2eframe.EventSink = eventChan
@@ -85,6 +77,7 @@ var rootCmd = &cobra.Command{
 			MaxRetries: 3,       // Retry failed tests up to 3 times
 			RetryDelay: "2s",    // Delay between retries
 			Debug:      isDebug, // Set to true for debug mode
+			BaseDir:    baseDir,
 		})
 		if err != nil {
 			fmt.Printf("%s%s✖ ERROR: %v%s\n", colorBold, colorRed, err, colorReset)
@@ -108,7 +101,6 @@ var rootCmd = &cobra.Command{
 				Template:       e2eframe.GetDefaultHTMLTemplate(),
 				TestsSecretary: testsSecretary,
 			})
-
 			if err != nil {
 				fmt.Printf("%s%s✖ ERROR: %v%s\n", colorBold, colorRed, err, colorReset)
 
@@ -122,7 +114,6 @@ var rootCmd = &cobra.Command{
 				OutputFile:     jsonReportPath,
 				TestsSecretary: testsSecretary,
 			})
-
 			if err != nil {
 				fmt.Printf("%s%s✖ ERROR: %v%s\n", colorBold, colorRed, err, colorReset)
 
@@ -202,7 +193,7 @@ func ScaffoldTest(testName string, templates []string) error {
 	}
 
 	suiteDir := filepath.Join(e2eframe.TestsDir, testName)
-	if err := os.MkdirAll(suiteDir, 0755); err != nil {
+	if err := os.MkdirAll(suiteDir, 0o755); err != nil {
 		return fmt.Errorf("could not create directory %s: %w", suiteDir, err)
 	}
 
@@ -290,7 +281,7 @@ tests:
 `, testName, strings.TrimSpace(unitsTmpl))
 
 	content := fmt.Sprintf(tmpl, testName, testName)
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("could not write file %s: %w", configPath, err)
 	}
 
@@ -314,6 +305,7 @@ func init() {
 		String("suite", "", "run specific test suites, e.g. 'e2e --suite=healthcheck,TestService_,_Function'")
 	rootCmd.Flags().String("html", "", "generate HTML report to this path") // new
 	rootCmd.Flags().String("json", "", "generate JSON report to this path")
+	rootCmd.Flags().String("base-dir", "", "base directory for tests, defaults to current directory")
 
 	scaffoldTestCmd.Flags().
 		String("tmpl", "", "templates to use for scaffolding, e.g. 'e2e scaffold-test my_test --tmpl=mongo,httpmock'")

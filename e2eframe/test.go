@@ -129,6 +129,7 @@ type RunTestOptions struct {
 	EventSink  chan<- Event
 	MaxRetries int    // Number of retries for failed tests
 	RetryDelay string // Delay between retries (e.g. "2s")
+	BaseDir    string // Base directory for the test suite, used for relative paths
 }
 
 type TestSuite interface {
@@ -207,6 +208,7 @@ type TestSuiteV1 struct {
 	TestTarget     Unit
 	TestSuiteTests []TestSuiteTest
 	RelativePath   string // Relative path to the test suite file
+	WorkingDir     string // Working directory for the test suite, used for relative paths
 }
 
 // NewTestSuiteV1 creates a new test suite with the given name, kind, units, target, and tests.
@@ -379,7 +381,9 @@ func (t *TestSuiteV1) calculateEnvDependencies() ([]EnvDependency, error) {
 			continue
 		}
 
-		envVars := unit.GetEnvRaw()
+		envVars := unit.GetEnvRaw(&GetEnvRawOptions{
+			WorkingDir: t.WorkingDir,
+		})
 		for key, value := range envVars {
 			if value == "" {
 				continue
@@ -714,7 +718,7 @@ func (t *TestSuiteV1) interpolateVarsAndStartUnits(
 		}
 
 		// Get dependant env vars from unit
-		var envVars = map[string]string{}
+		envVars := map[string]string{}
 
 		for _, dep := range varDependencies {
 			if dep.DependantUnitName == unit.Name() {
@@ -746,6 +750,7 @@ func (t *TestSuiteV1) interpolateVarsAndStartUnits(
 			EventSink:   opts.EventSink,
 			Fixtures:    t.Fixtures,
 			Debug:       opts.Debug,
+			WorkingDir:  opts.BaseDir,
 		}); err != nil {
 			err = fmt.Errorf("start unit %s: %w", unit.Name(), err)
 

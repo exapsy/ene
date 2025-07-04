@@ -3,9 +3,9 @@ package e2eframe_test
 import (
 	"testing"
 
+	"github.com/exapsy/ene/e2eframe"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
-	"microservice-var/cmd/e2e/e2eframe"
 )
 
 // dummyUnit implements ConfigUnit for testing.

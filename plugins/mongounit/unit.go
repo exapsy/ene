@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/exapsy/ene/e2eframe"
 	"github.com/testcontainers/testcontainers-go"
 	"gopkg.in/yaml.v3"
-	"microservice-var/cmd/e2e/e2eframe"
 )
 
 const (
@@ -117,7 +117,7 @@ func (m *MongoUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) 
 			NetworkAliases: map[string][]string{
 				opts.Network.Name: {m.serviceName},
 			},
-			//ExposedPorts: []string{fmt.Sprintf("%d/tcp", freePort)},
+			// ExposedPorts: []string{fmt.Sprintf("%d/tcp", freePort)},
 			Image: "mongo:6.0",
 			HostConfigModifier: func(hc *container.HostConfig) {
 				hc.Memory = 512 * 1024 * 1024     // 512 MB max
@@ -165,8 +165,8 @@ func (m *MongoUnit) ExternalEndpoint() string {
 }
 
 func (m *MongoUnit) LocalEndpoint() string {
-	//host, _ := m.container.Host(context.Background())
-	//port, _ := m.container.MappedPort(context.Background(), "27017")
+	// host, _ := m.container.Host(context.Background())
+	// port, _ := m.container.MappedPort(context.Background(), "27017")
 	return fmt.Sprintf("mongodb://%s:%d", m.serviceName, m.appPort)
 }
 
@@ -258,7 +258,7 @@ func (m *MongoUnit) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-func (m *MongoUnit) GetEnvRaw() map[string]string {
+func (m *MongoUnit) GetEnvRaw(_ *e2eframe.GetEnvRawOptions) map[string]string {
 	envs := make(map[string]string)
 
 	if m.envFile != "" {

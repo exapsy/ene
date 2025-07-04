@@ -245,6 +245,7 @@ func (t *TestSuiteConfigV1) validateDuplicateTestNames() error {
 
 type CreateSuiteParams struct {
 	RelativePath string
+	WorkingDir   string
 }
 
 func (t *TestSuiteConfigV1) CreateTestSuite(params CreateSuiteParams) (TestSuite, error) {
@@ -265,6 +266,7 @@ func (t *TestSuiteConfigV1) CreateTestSuite(params CreateSuiteParams) (TestSuite
 	}
 
 	testSuite := &TestSuiteV1{
+		WorkingDir:     params.WorkingDir,
 		RelativePath:   params.RelativePath,
 		TestKind:       t.TestKind,
 		TestName:       t.TestName,

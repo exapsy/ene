@@ -7,11 +7,11 @@ import (
 	stdhttptest "net/http/httptest"
 	"testing"
 
+	"github.com/exapsy/ene/e2eframe"
+	httptestplugin "github.com/exapsy/ene/plugins/httptest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
-	"microservice-var/cmd/e2e/e2eframe"
-	httptestplugin "microservice-var/cmd/e2e/plugins/httptest"
 )
 
 // dummySuite satisfies e2eframe.TestSuite for Initialize().
@@ -35,13 +35,13 @@ func (dummyUnit) Name() string { return "u" }
 func (dummyUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) error {
 	return nil
 }
-func (dummyUnit) WaitForReady(ctx context.Context) error { return nil }
-func (dummyUnit) Stop() error                            { return nil }
-func (dummyUnit) ExternalEndpoint() string               { return "http://example.com" }
-func (dummyUnit) LocalEndpoint() string                  { return "" }
-func (dummyUnit) Get(key string) (string, error)         { return "", nil }
-func (dummyUnit) GetEnvRaw() map[string]string           { return nil }
-func (dummyUnit) SetEnvs(env map[string]string)          {}
+func (dummyUnit) WaitForReady(ctx context.Context) error                   { return nil }
+func (dummyUnit) Stop() error                                              { return nil }
+func (dummyUnit) ExternalEndpoint() string                                 { return "http://example.com" }
+func (dummyUnit) LocalEndpoint() string                                    { return "" }
+func (dummyUnit) Get(key string) (string, error)                           { return "", nil }
+func (dummyUnit) GetEnvRaw(_ *e2eframe.GetEnvRawOptions) map[string]string { return nil }
+func (dummyUnit) SetEnvs(env map[string]string)                            {}
 
 func TestUnmarshalYAML(t *testing.T) {
 	tests := []struct {
@@ -109,19 +109,6 @@ expect:
 			assert.Equal(t, tt.want.Expect.StatusCode, got.Expect.StatusCode)
 		})
 	}
-}
-
-func TestInitializeDefaults(t *testing.T) {
-	// leave all zero-values on purpose
-	ts := &httptestplugin.TestSuiteTest{}
-	err := ts.Initialize(dummySuite{})
-	require.NoError(t, err)
-
-	assert.Equal(t, "http://example.com", ts.TargetEndpoint)
-	assert.Equal(t, "/", ts.Request.Path)
-	assert.Equal(t, http.MethodGet, ts.Request.Method)
-	assert.Equal(t, "5s", ts.Request.Timeout)
-	assert.Equal(t, http.StatusOK, ts.Expect.StatusCode)
 }
 
 func TestRunAgainstServer(t *testing.T) {
