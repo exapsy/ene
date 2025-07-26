@@ -14,6 +14,7 @@ import (
 	_ "github.com/exapsy/ene/plugins/httpmockunit"
 	_ "github.com/exapsy/ene/plugins/httptest"
 	_ "github.com/exapsy/ene/plugins/httpunit"
+	_ "github.com/exapsy/ene/plugins/miniounit"
 	_ "github.com/exapsy/ene/plugins/mongounit"
 	_ "github.com/exapsy/ene/plugins/postgresunit"
 	"github.com/spf13/cobra"
@@ -211,6 +212,39 @@ var scaffoldTestCmd = &cobra.Command{
 	},
 }
 
+var dryRunCmd = &cobra.Command{
+	Use:   "dry-run [test-file]",
+	Args:  cobra.MaximumNArgs(1),
+	Short: "Validate test configuration without running containers",
+	Long:  `Parse and validate test configuration files to check for syntax errors and plugin compatibility`,
+	Run: func(cmd *cobra.Command, args []string) {
+		verbose := cmd.Flag("verbose").Value.String()
+		debug := cmd.Flag("debug").Value.String()
+		baseDir := cmd.Flag("base-dir").Value.String()
+
+		isVerbose := verbose == "true"
+		isDebug := debug == "true"
+
+		var testFile string
+		if len(args) > 0 {
+			testFile = args[0]
+		}
+
+		err := e2eframe.DryRun(context.Background(), &e2eframe.DryRunOpts{
+			TestFile: testFile,
+			Verbose:  isVerbose,
+			Debug:    isDebug,
+			BaseDir:  baseDir,
+		})
+		if err != nil {
+			fmt.Printf("%s%s✖ DRY RUN FAILED: %v%s\n", colorBold, colorRed, err, colorReset)
+			os.Exit(1)
+		}
+
+		fmt.Printf("%s%s✓ DRY RUN PASSED: Configuration is valid%s\n", colorBold, colorGreen, colorReset)
+	},
+}
+
 // ScaffoldTest creates a new test suite in ./tests/<name>.
 func ScaffoldTest(testName string, templates []string) error {
 	if testName == "" {
@@ -336,7 +370,12 @@ func init() {
 	scaffoldTestCmd.Flags().
 		String("tmpl", "", "templates to use for scaffolding, e.g. 'e2e scaffold-test my_test --tmpl=mongo,httpmock'")
 
+	dryRunCmd.Flags().BoolP("verbose", "v", false, "enable detailed logs")
+	dryRunCmd.Flags().Bool("debug", false, "enable debug mode")
+	dryRunCmd.Flags().String("base-dir", "", "base directory for tests, defaults to current directory")
+
 	rootCmd.AddCommand(scaffoldTestCmd)
+	rootCmd.AddCommand(dryRunCmd)
 	rootCmd.AddCommand(versionCmd)
 }
 

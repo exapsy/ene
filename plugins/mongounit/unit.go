@@ -25,6 +25,7 @@ type MongoUnitConfig struct {
 	EnvFile        string        `yaml:"env_file"`
 	Env            any           `yaml:"env"`
 	StartupTimeout time.Duration `yaml:"startup_timeout"`
+	Cmd            []string      `yaml:"cmd"`
 }
 
 type MongoUnit struct {
@@ -38,6 +39,7 @@ type MongoUnit struct {
 	envFile           string
 	appPort           int
 	startupTimeout    time.Duration
+	cmd               []string
 	EnvVars           map[string]any
 }
 
@@ -88,6 +90,16 @@ func New(cfg map[string]any) (e2eframe.Unit, error) {
 		envVars = nil
 	}
 
+	// Handle cmd
+	var cmdArgs []string
+	if cmdRaw, ok := cfg["cmd"].([]interface{}); ok {
+		for _, cmdItem := range cmdRaw {
+			if cmdStr, ok := cmdItem.(string); ok {
+				cmdArgs = append(cmdArgs, cmdStr)
+			}
+		}
+	}
+
 	return &MongoUnit{
 		Image:             image,
 		MigrationFilePath: migrations,
@@ -96,6 +108,7 @@ func New(cfg map[string]any) (e2eframe.Unit, error) {
 		envFile:           envFile,
 		EnvVars:           envVars,
 		startupTimeout:    startupTimeout,
+		cmd:               cmdArgs,
 	}, nil
 }
 
@@ -111,6 +124,15 @@ func (m *MongoUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) 
 
 	m.exposedPort = freePort
 
+	// Use custom cmd if provided, otherwise use default MongoDB command
+	cmd := m.cmd
+	if len(cmd) == 0 {
+		cmd = []string{
+			"mongod", "--bind_ip_all",
+			"--wiredTigerCacheSizeGB", "0.25",
+		}
+	}
+
 	req := testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Networks: []string{opts.Network.Name},
@@ -123,10 +145,7 @@ func (m *MongoUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) 
 				hc.Memory = 512 * 1024 * 1024     // 512 MB max
 				hc.MemorySwap = 512 * 1024 * 1024 // no swap beyond that
 			},
-			Cmd: []string{
-				"mongod", "--bind_ip_all",
-				"--wiredTigerCacheSizeGB", "0.25",
-			},
+			Cmd: cmd,
 		},
 		Started: true,
 	}
@@ -318,6 +337,15 @@ func UnmarshalUnit(node *yaml.Node) (e2eframe.Unit, error) {
 		"app_port":   mongoCfg.AppPort,
 		"env_file":   mongoCfg.EnvFile,
 		"env":        mongoCfg.Env,
+	}
+
+	// Convert cmd from []string to []interface{}
+	if len(mongoCfg.Cmd) > 0 {
+		cmd := make([]interface{}, len(mongoCfg.Cmd))
+		for i, cmdItem := range mongoCfg.Cmd {
+			cmd[i] = cmdItem
+		}
+		cfg["cmd"] = cmd
 	}
 
 	// Properly handle startup_timeout

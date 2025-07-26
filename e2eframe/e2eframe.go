@@ -240,6 +240,13 @@ type RunOpts struct {
 	CleanupCache bool   // Cleanup old cached Docker images to prevent bloat
 }
 
+type DryRunOpts struct {
+	TestFile string // Specific test file to validate (optional)
+	Verbose  bool   // Enable verbose output
+	Debug    bool   // Enable debug mode
+	BaseDir  string // Base directory for test suites
+}
+
 func Run(ctx context.Context, opts *RunOpts) error {
 	var err error
 
@@ -305,6 +312,125 @@ func Run(ctx context.Context, opts *RunOpts) error {
 			}
 		}
 	}()
+
+	return nil
+}
+
+// DryRun validates test configuration without running containers
+func DryRun(ctx context.Context, opts *DryRunOpts) error {
+	if opts.TestFile != "" {
+		// Validate a specific test file
+		return validateSingleTestFile(opts.TestFile, opts)
+	}
+
+	// Validate all test suites in the directory structure
+	testSuites, err := LoadTestSuites(opts.BaseDir)
+	if err != nil {
+		return fmt.Errorf("load test suites: %w", err)
+	}
+
+	if opts.Verbose {
+		fmt.Printf("Found %d test suite(s) to validate\n", len(testSuites))
+	}
+
+	for _, testSuite := range testSuites {
+		if opts.Verbose {
+			fmt.Printf("Validating test suite: %s\n", testSuite.Name())
+		}
+
+		// Validate units in the test suite
+		if err := validateTestSuiteUnits(testSuite, opts); err != nil {
+			return fmt.Errorf("validation failed for suite %s: %w", testSuite.Name(), err)
+		}
+
+		if opts.Verbose {
+			fmt.Printf("✓ Test suite %s is valid\n", testSuite.Name())
+		}
+	}
+
+	return nil
+}
+
+// validateSingleTestFile validates a single test file
+func validateSingleTestFile(testFile string, opts *DryRunOpts) error {
+	if opts.Verbose {
+		fmt.Printf("Validating test file: %s\n", testFile)
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(testFile); os.IsNotExist(err) {
+		return fmt.Errorf("test file not found: %s", testFile)
+	}
+
+	// Try to load the test suite
+	testSuite, err := LoadTestSuite(testFile)
+	if err != nil {
+		return fmt.Errorf("failed to load test file %s: %w", testFile, err)
+	}
+
+	// Validate units in the test suite
+	if err := validateTestSuiteUnits(testSuite, opts); err != nil {
+		return fmt.Errorf("validation failed for %s: %w", testFile, err)
+	}
+
+	if opts.Verbose {
+		fmt.Printf("✓ Test file %s is valid\n", testFile)
+	}
+
+	return nil
+}
+
+// validateTestSuiteUnits validates all units in a test suite
+func validateTestSuiteUnits(testSuite TestSuite, opts *DryRunOpts) error {
+	units := testSuite.Units()
+
+	if opts.Verbose {
+		fmt.Printf("  Validating %d unit(s)\n", len(units))
+	}
+
+	for _, unit := range units {
+		if opts.Debug {
+			fmt.Printf("    Validating unit: %s (kind: %T)\n", unit.Name(), unit)
+		}
+
+		// Validate that the unit implements the required interface properly
+		if unit.Name() == "" {
+			return fmt.Errorf("unit has empty name")
+		}
+
+		// Test that environment variables can be retrieved
+		envVars := unit.GetEnvRaw(&GetEnvRawOptions{
+			WorkingDir: opts.BaseDir,
+		})
+
+		if opts.Debug {
+			fmt.Printf("      Unit %s has %d environment variables\n", unit.Name(), len(envVars))
+		}
+
+		if opts.Verbose {
+			fmt.Printf("    ✓ Unit %s is valid\n", unit.Name())
+		}
+	}
+
+	// Validate tests
+	tests := testSuite.Tests()
+	if opts.Verbose {
+		fmt.Printf("  Validating %d test(s)\n", len(tests))
+	}
+
+	for _, test := range tests {
+		if opts.Debug {
+			fmt.Printf("    Validating test: %s\n", test.Name())
+		}
+
+		if test.Name() == "" {
+			return fmt.Errorf("test has empty name")
+		}
+
+		if opts.Verbose {
+			fmt.Printf("    ✓ Test %s is valid\n", test.Name())
+		}
+	}
 
 	return nil
 }

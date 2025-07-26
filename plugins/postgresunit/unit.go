@@ -35,6 +35,7 @@ type PostgresUnitConfig struct {
 	Database       string        `yaml:"database"`
 	User           string        `yaml:"user"`
 	Password       string        `yaml:"password"`
+	Cmd            []string      `yaml:"cmd"`
 }
 
 type PostgresUnit struct {
@@ -50,6 +51,7 @@ type PostgresUnit struct {
 	database       string
 	user           string
 	password       string
+	cmd            []string
 	EnvVars        map[string]any
 }
 
@@ -115,17 +117,28 @@ func New(cfg map[string]any) (e2eframe.Unit, error) {
 		envVars = make(map[string]any)
 	}
 
+	// Handle cmd
+	var cmdArgs []string
+	if cmdRaw, ok := cfg["cmd"].([]interface{}); ok {
+		for _, cmdItem := range cmdRaw {
+			if cmdStr, ok := cmdItem.(string); ok {
+				cmdArgs = append(cmdArgs, cmdStr)
+			}
+		}
+	}
+
 	return &PostgresUnit{
 		Image:          image,
 		MigrationsPath: migrations,
 		serviceName:    name,
 		appPort:        appPort,
 		envFile:        envFile,
+		EnvVars:        envVars,
+		startupTimeout: startupTimeout,
 		database:       database,
 		user:           user,
 		password:       password,
-		EnvVars:        envVars,
-		startupTimeout: startupTimeout,
+		cmd:            cmdArgs,
 	}, nil
 }
 
@@ -159,6 +172,13 @@ func (p *PostgresUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOption
 		}
 	}
 
+	// Use custom cmd if provided, otherwise use default PostgreSQL command
+	cmd := p.cmd
+	if len(cmd) == 0 {
+		// PostgreSQL uses default cmd from the image
+		cmd = nil
+	}
+
 	req := testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Networks: []string{opts.Network.Name},
@@ -168,6 +188,7 @@ func (p *PostgresUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOption
 			Image:        p.Image,
 			Env:          env,
 			ExposedPorts: []string{fmt.Sprintf("%d/tcp", DefaultPort)},
+			Cmd:          cmd,
 			WaitingFor: wait.ForAll(
 				wait.ForLog("database system is ready to accept connections").
 					WithOccurrence(2).
@@ -391,6 +412,15 @@ func UnmarshalUnit(node *yaml.Node) (e2eframe.Unit, error) {
 		"database":   postgresCfg.Database,
 		"user":       postgresCfg.User,
 		"password":   postgresCfg.Password,
+	}
+
+	// Convert cmd from []string to []interface{}
+	if len(postgresCfg.Cmd) > 0 {
+		cmd := make([]interface{}, len(postgresCfg.Cmd))
+		for i, cmdItem := range postgresCfg.Cmd {
+			cmd[i] = cmdItem
+		}
+		cfg["cmd"] = cmd
 	}
 
 	// Properly handle startup_timeout

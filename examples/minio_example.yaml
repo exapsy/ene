@@ -1,0 +1,140 @@
+# Example E2E test configuration with Minio
+# This demonstrates how to use the Minio plugin in ene framework
+
+kind: e2e_test:v1
+name: minio-example-test
+
+units:
+  # Minio service with default configuration
+  - kind: minio
+    name: minio-server
+    image: minio/minio:latest
+    access_key: testuser
+    secret_key: testpass123
+    app_port: 9000
+    console_port: 9001
+    startup_timeout: 30s
+    buckets:
+      - uploads
+      - documents
+      - images
+    env:
+      - MINIO_BROWSER=on
+      - MINIO_DOMAIN=localhost
+
+  # Example HTTP service that uses Minio
+  - kind: http
+    name: file-service
+    image: node:18-alpine
+    app_port: 3000
+    env:
+      - MINIO_ENDPOINT={{ minio-server.local_endpoint }}
+      - MINIO_ACCESS_KEY={{ minio-server.access_key }}
+      - MINIO_SECRET_KEY={{ minio-server.secret_key }}
+      - MINIO_BUCKET=uploads
+    cmd:
+      - /bin/sh
+      - -c
+      - |
+        npm init -y
+        npm install express minio
+        cat > server.js << 'EOF'
+        const express = require('express');
+        const Minio = require('minio');
+        
+        const app = express();
+        app.use(express.json());
+        
+        const minioClient = new Minio.Client({
+          endPoint: process.env.MINIO_ENDPOINT.split(':')[0],
+          port: parseInt(process.env.MINIO_ENDPOINT.split(':')[1]),
+          useSSL: false,
+          accessKey: process.env.MINIO_ACCESS_KEY,
+          secretKey: process.env.MINIO_SECRET_KEY
+        });
+        
+        app.get('/health', (req, res) => {
+          res.json({ status: 'ok', minio: process.env.MINIO_ENDPOINT });
+        });
+        
+        app.get('/buckets', async (req, res) => {
+          try {
+            const buckets = await minioClient.listBuckets();
+            res.json(buckets);
+          } catch (error) {
+            res.status(500).json({ error: error.message });
+          }
+        });
+        
+        app.post('/upload', async (req, res) => {
+          try {
+            const { filename, content } = req.body;
+            await minioClient.putObject(
+              process.env.MINIO_BUCKET,
+              filename,
+              Buffer.from(content, 'utf8')
+            );
+            res.json({ success: true, filename });
+          } catch (error) {
+            res.status(500).json({ error: error.message });
+          }
+        });
+        
+        app.get('/files/:filename', async (req, res) => {
+          try {
+            const stream = await minioClient.getObject(
+              process.env.MINIO_BUCKET,
+              req.params.filename
+            );
+            let content = '';
+            stream.on('data', chunk => content += chunk);
+            stream.on('end', () => res.json({ filename: req.params.filename, content }));
+          } catch (error) {
+            res.status(500).json({ error: error.message });
+          }
+        });
+        
+        const port = process.env.PORT || 3000;
+        app.listen(port, '0.0.0.0', () => {
+          console.log(\`Server running on port \${port}\`);
+        });
+        EOF
+        node server.js
+
+target: file-service
+
+tests:
+  - name: "Test Minio connectivity"
+    kind: http
+    request:
+      method: GET
+      path: /health
+    expect:
+      status_code: 200
+
+  - name: "List available buckets"
+    kind: http
+    request:
+      method: GET
+      path: /buckets
+    expect:
+      status_code: 200
+
+  - name: "Upload a file to Minio"
+    kind: http
+    request:
+      method: POST
+      path: /upload
+      headers:
+        Content-Type: "application/json"
+      body: '{"filename": "test.txt", "content": "Hello, Minio!"}'
+    expect:
+      status_code: 200
+
+  - name: "Download the uploaded file"
+    kind: http
+    request:
+      method: GET
+      path: /files/test.txt
+    expect:
+      status_code: 200

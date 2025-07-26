@@ -40,7 +40,8 @@
               "mongo",
               "http",
               "postgres",
-              "httpmock"
+              "httpmock",
+              "minio"
             ]
           },
           "image": {
@@ -110,23 +111,58 @@
               },
               "required": ["path", "method", "response"]
             }
+          },
+          "access_key": {
+            "type": "string",
+            "description": "Minio access key"
+          },
+          "secret_key": {
+            "type": "string", 
+            "description": "Minio secret key"
+          },
+          "console_port": {
+            "type": "integer",
+            "description": "Minio console port"
+          },
+          "buckets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of buckets to create"
+          },
+          "database": {
+            "type": "string",
+            "description": "PostgreSQL database name"
+          },
+          "user": {
+            "type": "string",
+            "description": "PostgreSQL user name"
+          },
+          "password": {
+            "type": "string",
+            "description": "PostgreSQL password"
           }
         },
-        "if": {
-          "properties": {
-            "kind": {
-              "const": "mongo"
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "mongo"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "migrations": {
+                  "type": "string",
+                  "description": "The path to the migrations js file."
+                }
+              }
             }
           }
-        },
-        "then": {
-          "properties": {
-            "migrations": {
-              "type": "string",
-              "description": "The path to the migrations js file."
-            }
-          }
-        },
+        ],
         "additionalProperties": false,
         "required": [
           "name",
