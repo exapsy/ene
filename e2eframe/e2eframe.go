@@ -3,7 +3,9 @@ package e2eframe
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,11 +13,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xeipuuv/gojsonschema"
 	"gopkg.in/yaml.v3"
 )
 
 //go:embed assets/html_report.tmpl
 var defaultHTMLTemplate string
+
+//go:embed test_schema.json
+var testSchemaJSON string
 
 func GetDefaultHTMLTemplate() string {
 	return defaultHTMLTemplate
@@ -81,7 +87,7 @@ func InterpolateString(regx *regexp.Regexp, str string, fixtures []Fixture) stri
 func LoadTestSuite(path string) (TestSuite, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open test suite file %s: %w", path, err)
 	}
 	defer file.Close()
 
@@ -91,16 +97,28 @@ func LoadTestSuite(path string) (TestSuite, error) {
 
 	var config TestSuiteConfig
 	if err := yaml.NewDecoder(file).Decode(&config); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read test suite kind from %s: %w", path, err)
 	}
 
 	switch config.Kind {
 	case string(ConfigKindE2ETest):
 		file.Seek(0, 0) // Reset file pointer to the beginning
 
-		var testSuiteConfig TestSuiteConfigV1
-		if err := yaml.NewDecoder(file).Decode(&testSuiteConfig); err != nil {
+		// Pre-validate using JSON schema
+		if err := validateTestSuiteSchema(file, path); err != nil {
 			return nil, err
+		}
+
+		file.Seek(0, 0) // Reset file pointer again for YAML parsing
+
+		var testSuiteConfig TestSuiteConfigV1
+		decoder := yaml.NewDecoder(file)
+		if err := decoder.Decode(&testSuiteConfig); err != nil {
+			// Try to provide more context about the YAML error
+			if yamlErr, ok := err.(*yaml.TypeError); ok {
+				return nil, NewYAMLError(yamlErr.Error(), path)
+			}
+			return nil, NewYAMLError(err.Error(), path)
 		}
 
 		suitePath := filepath.Dir(path)
@@ -113,13 +131,56 @@ func LoadTestSuite(path string) (TestSuite, error) {
 
 		testSuite, err := testSuiteConfig.CreateTestSuite(params)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create test suite from %s: %w", path, err)
 		}
 
 		return testSuite, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported test suite kind: %s", config.Kind)
+	}
+}
+
+// validateTestSuiteSchema validates the test suite YAML against the JSON schema
+func validateTestSuiteSchema(file *os.File, path string) error {
+	// Convert YAML to JSON for schema validation
+	yamlBytes, err := io.ReadAll(file)
+	if err != nil {
+		return NewValidationError("failed to read test suite file", path, 0)
 	}
 
-	return nil, fmt.Errorf("unrecognized test suite kind: %s", config.Kind)
+	var yamlData interface{}
+	if err := yaml.Unmarshal(yamlBytes, &yamlData); err != nil {
+		return NewYAMLError(fmt.Sprintf("invalid YAML syntax: %s", err.Error()), path)
+	}
+
+	jsonBytes, err := json.Marshal(yamlData)
+	if err != nil {
+		return NewValidationError("failed to convert YAML to JSON for validation", path, 0)
+	}
+
+	// Load schema and document
+	schemaLoader := gojsonschema.NewStringLoader(testSchemaJSON)
+	documentLoader := gojsonschema.NewBytesLoader(jsonBytes)
+
+	// Validate
+	result, err := gojsonschema.Validate(schemaLoader, documentLoader)
+	if err != nil {
+		return NewValidationError(fmt.Sprintf("schema validation failed: %s", err.Error()), path, 0)
+	}
+
+	if !result.Valid() {
+		// Create a user-friendly error message from validation errors
+		var errorMessages []string
+		for _, desc := range result.Errors() {
+			errorMessages = append(errorMessages, fmt.Sprintf("- %s at %s", desc.Description(), desc.Field()))
+		}
+
+		errorMsg := fmt.Sprintf("test suite validation failed:\n%s", strings.Join(errorMessages, "\n"))
+		return NewValidationError(errorMsg, path, 0)
+	}
+
+	return nil
 }
 
 func LoadTestSuites(baseDir string) ([]TestSuite, error) {
@@ -157,7 +218,7 @@ func LoadTestSuites(baseDir string) ([]TestSuite, error) {
 
 			testSuite, err := LoadTestSuite(testFilePath)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("failed to load test suite from %s: %w", testFilePath, err)
 			}
 
 			testSuites = append(testSuites, testSuite)
@@ -168,14 +229,15 @@ func LoadTestSuites(baseDir string) ([]TestSuite, error) {
 }
 
 type RunOpts struct {
-	FilterFunc func(test, testName string) bool
-	Verbose    bool
-	Parallel   bool
-	Events     EventSink
-	MaxRetries int    // Number of retries for failed tests
-	RetryDelay string // Delay between retries (e.g. "2s")
-	Debug      bool   // Enable debug mode
-	BaseDir    string // Base directory for test suites
+	FilterFunc   func(test, testName string) bool
+	Verbose      bool
+	Parallel     bool
+	Events       EventSink
+	MaxRetries   int    // Number of retries for failed tests
+	RetryDelay   string // Delay between retries (e.g. "2s")
+	Debug        bool   // Enable debug mode
+	BaseDir      string // Base directory for test suites
+	CleanupCache bool   // Cleanup old cached Docker images to prevent bloat
 }
 
 func Run(ctx context.Context, opts *RunOpts) error {
@@ -266,20 +328,24 @@ func runTestsInParallel(
 			defer wg.Done()
 
 			err := testSuite.Run(ctx, &RunTestOptions{
-				FilterFunc: opts.FilterFunc,
-				Verbose:    opts.Verbose,
-				EventSink:  events,
-				MaxRetries: opts.MaxRetries,
-				RetryDelay: opts.RetryDelay,
-				Debug:      opts.Debug,
-				BaseDir:    opts.BaseDir,
+				FilterFunc:   opts.FilterFunc,
+				Verbose:      opts.Verbose,
+				CleanupCache: opts.CleanupCache,
+				EventSink:    events,
+				MaxRetries:   opts.MaxRetries,
+				RetryDelay:   opts.RetryDelay,
+				Debug:        opts.Debug,
+				BaseDir:      opts.BaseDir,
 			})
 			if err != nil {
-				events <- &BaseEvent{
-					EventType:    EventSuiteError,
-					EventTime:    time.Now(),
-					Suite:        testSuite.Name(),
-					EventMessage: fmt.Sprintf("Error running test suite %s: %v", testSuite.Name(), err),
+				events <- &SuiteErrorEvent{
+					BaseEvent: BaseEvent{
+						EventType:    EventSuiteError,
+						EventTime:    time.Now(),
+						Suite:        testSuite.Name(),
+						EventMessage: fmt.Sprintf("Error running test suite %s: %v", testSuite.Name(), err),
+					},
+					Error: err,
 				}
 			} else {
 				events <- &BaseEvent{
@@ -311,20 +377,24 @@ func runTestsSequentially(
 
 		// Create test options with filter
 		err := testSuite.Run(ctx, &RunTestOptions{
-			FilterFunc: opts.FilterFunc,
-			Verbose:    opts.Verbose,
-			EventSink:  events,
-			MaxRetries: opts.MaxRetries,
-			RetryDelay: opts.RetryDelay,
-			Debug:      opts.Debug,
-			BaseDir:    opts.BaseDir,
+			FilterFunc:   opts.FilterFunc,
+			Verbose:      opts.Verbose,
+			CleanupCache: opts.CleanupCache,
+			EventSink:    events,
+			MaxRetries:   opts.MaxRetries,
+			RetryDelay:   opts.RetryDelay,
+			Debug:        opts.Debug,
+			BaseDir:      opts.BaseDir,
 		})
 		if err != nil {
-			events <- &BaseEvent{
-				EventType:    EventSuiteError,
-				EventTime:    time.Now(),
-				Suite:        testSuite.Name(),
-				EventMessage: fmt.Sprintf("Error running test suite %s: %v", testSuite.Name(), err),
+			events <- &SuiteErrorEvent{
+				BaseEvent: BaseEvent{
+					EventType:    EventSuiteError,
+					EventTime:    time.Now(),
+					Suite:        testSuite.Name(),
+					EventMessage: fmt.Sprintf("Error running test suite %s: %v", testSuite.Name(), err),
+				},
+				Error: err,
 			}
 		} else {
 			events <- &BaseEvent{

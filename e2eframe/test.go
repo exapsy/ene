@@ -9,12 +9,27 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/network"
+	tcnetwork "github.com/testcontainers/testcontainers-go/network"
 	"gopkg.in/yaml.v3"
 )
+
+type InterpolationError struct {
+	err error
+}
+
+func (e *InterpolationError) Error() string {
+	if e.err != nil {
+		return fmt.Sprintf("interpolation error: %v", e.err)
+	}
+	return "interpolation error"
+}
+
+func (e *InterpolationError) Unwrap() error {
+	return e.err
+}
 
 type TestSuiteTestKindNotFoundErr struct {
 	Kind TestSuiteTestKind
@@ -70,6 +85,7 @@ type TestResult struct {
 	Passed    bool
 	Message   string
 	Err       error
+	Duration  time.Duration
 }
 
 func (t *TestResult) Unwrap() error {
@@ -85,7 +101,8 @@ func (t *TestResult) MessageOrErr() string {
 		return t.Err.Error()
 	}
 
-	return "unknown error"
+	// This should never happen if tests are properly implemented
+	return fmt.Sprintf("no error message available for test '%s'", t.TestName)
 }
 
 func (t TestResult) Error() string {
@@ -125,11 +142,15 @@ type RunTestOptions struct {
 	// FilterFunc filters test execution by suite name and test name
 	FilterFunc func(suiteName, testName string) bool
 	// Verbose enables verbose output
-	Verbose    bool
-	EventSink  chan<- Event
-	MaxRetries int    // Number of retries for failed tests
-	RetryDelay string // Delay between retries (e.g. "2s")
-	BaseDir    string // Base directory for the test suite, used for relative paths
+	Verbose      bool
+	CleanupCache bool // Cleanup old cached Docker images to prevent bloat
+	EventSink    chan<- Event
+	MaxRetries   int    // Number of retries for failed tests
+	RetryDelay   string // Delay between retries (e.g. "2s")
+	BaseDir      string // Base directory for the test suite, used for relative paths
+
+	// Performance optimizations
+	CacheImages bool // Enable image caching for faster builds
 }
 
 type TestSuite interface {
@@ -265,13 +286,22 @@ func (t *TestSuiteV1) runTest(
 		fmt.Sprintf("Running test %s in suite %s", test.Name(), t.Name()),
 	)
 
+	// Measure test execution time
+	startTime := time.Now()
 	result, err := test.Run(ctx, &TestSuiteTestRunOptions{
 		Verbose:      opts.Verbose,
 		Fixtures:     t.Fixtures,
 		RelativePath: t.RelativePath,
 	})
+	duration := time.Since(startTime)
+
 	if err != nil {
 		return nil, err
+	}
+
+	// Add duration to result
+	if result != nil {
+		result.Duration = duration
 	}
 
 	return result, nil
@@ -521,7 +551,7 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		return fmt.Errorf("order units by dependencies: %w", err)
 	}
 
-	net, err := network.New(ctx)
+	net, err := tcnetwork.New(ctx)
 	if err != nil {
 		return fmt.Errorf("create network: %w", err)
 	}
@@ -539,6 +569,7 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 	// Stop all units
 	// Remove networks
 	defer func() {
+		// Stop all units and wait for them to fully terminate
 		for i := len(reorderedUnits) - 1; i >= 0; i-- {
 			unit := reorderedUnits[i]
 			if unit == nil {
@@ -549,6 +580,9 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 				fmt.Printf("failed to stop unit %s: %v\n", unit.Name(), err)
 			}
 		}
+
+		// Wait a bit longer for containers to fully terminate before network cleanup
+		time.Sleep(2 * time.Second)
 
 		if err := ForceCleanupNetwork(ctx, net); err != nil {
 			fmt.Printf("failed to cleanup network %s: %v\n", net.Name, err)
@@ -606,11 +640,13 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		}
 
 		if testErr != nil {
+			// For errors without a result, we don't have timing data
 			t.sendTestEvent(
 				opts.EventSink,
 				test.Name(),
 				false,
 				testErr.Error(),
+				time.Duration(0),
 			)
 
 			return fmt.Errorf("run test %s: %w", test.Name(), testErr)
@@ -624,6 +660,7 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 					result.TestName,
 					false,
 					result.MessageOrErr(),
+					result.Duration,
 				)
 
 				return nil
@@ -633,6 +670,7 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 					result.TestName,
 					true,
 					"",
+					result.Duration,
 				)
 			}
 		}
@@ -688,6 +726,7 @@ func (t *TestSuiteV1) sendTestEvent(
 	testName string,
 	passed bool,
 	message string,
+	duration time.Duration,
 ) {
 	if eventSink != nil {
 		eventSink <- &TestEvent{
@@ -699,6 +738,7 @@ func (t *TestSuiteV1) sendTestEvent(
 			},
 			TestName: testName,
 			Passed:   passed,
+			Duration: duration,
 		}
 	}
 }
@@ -744,13 +784,14 @@ func (t *TestSuiteV1) interpolateVarsAndStartUnits(
 		unit.SetEnvs(envVars)
 
 		if err = unit.Start(ctx, &UnitStartOptions{
-			Network:     net,
-			Verbose:     opts.Verbose,
-			CacheImages: true,
-			EventSink:   opts.EventSink,
-			Fixtures:    t.Fixtures,
-			Debug:       opts.Debug,
-			WorkingDir:  opts.BaseDir,
+			Network:      net,
+			Verbose:      opts.Verbose,
+			CacheImages:  true,
+			CleanupCache: opts.CleanupCache,
+			EventSink:    opts.EventSink,
+			Fixtures:     t.Fixtures,
+			Debug:        opts.Debug,
+			WorkingDir:   opts.BaseDir,
 		}); err != nil {
 			err = fmt.Errorf("start unit %s: %w", unit.Name(), err)
 
@@ -768,8 +809,8 @@ func (t *TestSuiteV1) interpolateVarsAndStartUnits(
 }
 
 // ForceCleanupNetwork forcefully removes all containers from a network before attempting to delete it.
-func ForceCleanupNetwork(ctx context.Context, network *testcontainers.DockerNetwork) error {
-	if network == nil {
+func ForceCleanupNetwork(ctx context.Context, net *testcontainers.DockerNetwork) error {
+	if net == nil {
 		return nil
 	}
 
@@ -779,23 +820,53 @@ func ForceCleanupNetwork(ctx context.Context, network *testcontainers.DockerNetw
 	}
 	defer dockerCli.Close()
 
-	// Get all containers
-	containers, err := dockerCli.ContainerList(ctx, container.ListOptions{All: true})
+	// Get containers connected to this specific network
+	networkInfo, err := dockerCli.NetworkInspect(ctx, net.Name, network.InspectOptions{})
 	if err != nil {
-		return fmt.Errorf("list containers: %w", err)
+		// Network might already be removed, which is fine
+		if strings.Contains(err.Error(), "not found") {
+			return nil
+		}
+		return fmt.Errorf("inspect network: %w", err)
 	}
 
-	// Disconnect all containers from the network
-	for _, c := range containers {
-		err := dockerCli.NetworkDisconnect(ctx, network.Name, c.ID, true)
-		if err != nil && !strings.Contains(err.Error(), "is not connected") {
-			fmt.Printf("Warning: Failed to remove container %s: %v\n", c.ID[:12], err)
+	// Disconnect containers that are still connected to this network
+	for containerID := range networkInfo.Containers {
+		// Check if container still exists and is not already being removed
+		_, err := dockerCli.ContainerInspect(ctx, containerID)
+		if err != nil {
+			// Container doesn't exist anymore, skip
+			continue
+		}
+
+		err = dockerCli.NetworkDisconnect(ctx, net.Name, containerID, true)
+		if err != nil && !strings.Contains(err.Error(), "is not connected") &&
+			!strings.Contains(err.Error(), "marked for removal") {
+			fmt.Printf("Warning: Failed to disconnect container %s: %v\n", containerID[:12], err)
 		}
 	}
 
-	// Add a short delay to allow Docker to process the disconnects
-	time.Sleep(500 * time.Millisecond)
+	// Wait longer for Docker to process the disconnects and container removals
+	time.Sleep(1 * time.Second)
 
-	// Try to remove the network
-	return dockerCli.NetworkRemove(ctx, network.Name)
+	// Try to remove the network with retries
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		err = dockerCli.NetworkRemove(ctx, net.Name)
+		if err == nil {
+			return nil
+		}
+
+		if strings.Contains(err.Error(), "not found") {
+			// Network already removed, which is fine
+			return nil
+		}
+
+		if i < maxRetries-1 {
+			// Wait before retry
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+	return err
 }

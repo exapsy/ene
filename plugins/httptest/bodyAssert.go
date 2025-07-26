@@ -10,6 +10,7 @@ import (
 
 	"github.com/exapsy/ene/e2eframe"
 	"github.com/tidwall/gjson"
+	"gopkg.in/yaml.v3"
 )
 
 type TestBodyAssert struct {
@@ -27,24 +28,95 @@ type TestBodyAssert struct {
 	Type        BodyFieldType
 }
 
-func NewTestBodyAssert(cfg map[string]any) (TestBodyAssert, error) {
-	assert := TestBodyAssert{
-		Path:        cfg["path"].(string),
-		Contains:    cfg["contains"].(string),
-		NotContains: cfg["not_contains"].(string),
-		Equals:      cfg["equals"].(string),
-		NotEquals:   cfg["not_equals"].(string),
-		Matches:     cfg["matches"].(string),
-		NotMatches:  cfg["not_matches"].(string),
-		Present:     cfg["present"].(*bool),
-		Size:        cfg["length"].(int),
-		GreaterThan: cfg["greater_than"].(int),
-		LessThan:    cfg["less_than"].(int),
-		Type:        BodyFieldType(cfg["type"].(string)),
+func (t *TestBodyAssert) UnmarshalYAML(node *yaml.Node) error {
+	// Create a temporary map to safely extract values
+	var rawData map[string]interface{}
+	if err := node.Decode(&rawData); err != nil {
+		return fmt.Errorf("failed to decode body assert at line %d: %w", node.Line, err)
 	}
 
-	if !assert.IsValid() {
-		return TestBodyAssert{}, fmt.Errorf("invalid body assert configuration")
+	// Use the safe NewTestBodyAssert function for validation and type checking
+	bodyAssert, err := NewTestBodyAssert(rawData)
+	if err != nil {
+		// If it's already a BodyAssertError, just return it
+		if userErr, ok := err.(*e2eframe.BodyAssertError); ok {
+			userErr.Line = node.Line
+			return userErr
+		}
+		return err
+	}
+
+	// Copy the validated values to this instance
+	*t = bodyAssert
+	return nil
+}
+
+func NewTestBodyAssert(cfg map[string]any) (TestBodyAssert, error) {
+	assert := TestBodyAssert{}
+
+	// Safely extract path (required)
+	if path, ok := cfg["path"].(string); ok {
+		assert.Path = path
+	} else {
+		return TestBodyAssert{}, e2eframe.NewBodyAssertValidationError("missing_path", "", nil, "", 0)
+	}
+
+	// Safely extract optional string fields
+	if contains, ok := cfg["contains"].(string); ok {
+		assert.Contains = contains
+	}
+	if notContains, ok := cfg["not_contains"].(string); ok {
+		assert.NotContains = notContains
+	}
+	if equals, ok := cfg["equals"].(string); ok {
+		assert.Equals = equals
+	}
+	if notEquals, ok := cfg["not_equals"].(string); ok {
+		assert.NotEquals = notEquals
+	}
+	if matches, ok := cfg["matches"].(string); ok {
+		assert.Matches = matches
+	}
+	if notMatches, ok := cfg["not_matches"].(string); ok {
+		assert.NotMatches = notMatches
+	}
+	if typeStr, ok := cfg["type"].(string); ok {
+		assert.Type = BodyFieldType(typeStr)
+	}
+
+	// Safely extract optional bool pointer
+	if present, ok := cfg["present"].(bool); ok {
+		assert.Present = &present
+	}
+
+	// Safely extract optional int fields
+	if size, ok := cfg["length"].(int); ok {
+		assert.Size = size
+	}
+	if greaterThan, ok := cfg["greater_than"].(int); ok {
+		assert.GreaterThan = greaterThan
+	}
+	if lessThan, ok := cfg["less_than"].(int); ok {
+		assert.LessThan = lessThan
+	}
+
+	// Validate path first
+	if assert.Path == "" {
+		return TestBodyAssert{}, e2eframe.NewBodyAssertValidationError("empty_path", assert.Path, nil, "", 0)
+	}
+
+	// Check if at least one assertion condition is provided
+	hasCondition := assert.Contains != "" || assert.NotContains != "" || assert.Equals != "" || assert.NotEquals != "" ||
+		assert.Matches != "" || assert.NotMatches != "" || assert.Present != nil ||
+		assert.Size > 0 || assert.GreaterThan > 0 || assert.LessThan > 0
+
+	if !hasCondition {
+		return TestBodyAssert{}, e2eframe.NewBodyAssertValidationError("no_conditions", assert.Path, nil, "", 0)
+	}
+
+	// Validate type if set
+	if assert.Type != "" && !assert.Type.IsValid() {
+		return TestBodyAssert{}, e2eframe.NewBodyAssertValidationError("invalid_type", assert.Path, string(assert.Type), "", 0)
 	}
 
 	return assert, nil
@@ -55,17 +127,17 @@ func (e TestBodyAssert) IsValid() bool {
 		return false
 	}
 
-	if e.Contains == "" && e.NotContains == "" && e.Equals == "" && e.NotEquals == "" &&
-		e.Matches == "" &&
-		e.NotMatches == "" &&
-		e.Present == nil &&
-		e.Size == 0 &&
-		e.GreaterThan == 0 &&
-		e.LessThan == 0 {
+	// At least one assertion condition must be provided
+	hasCondition := e.Contains != "" || e.NotContains != "" || e.Equals != "" || e.NotEquals != "" ||
+		e.Matches != "" || e.NotMatches != "" || e.Present != nil ||
+		e.Size > 0 || e.GreaterThan > 0 || e.LessThan > 0
+
+	if !hasCondition {
 		return false
 	}
 
-	if !e.Type.IsValid() {
+	// Only validate Type if it's set
+	if e.Type != "" && !e.Type.IsValid() {
 		return false
 	}
 
@@ -76,10 +148,25 @@ type TestBodyAssertTestOptions struct {
 	Fixtures []e2eframe.Fixture
 }
 
-func (e TestBodyAssert) Test(r *http.Response, opts *TestBodyAssertTestOptions) error {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read body: %w", err)
+func (e TestBodyAssert) Test(r *http.Response, opts *TestBodyAssertTestOptions) (err error) {
+	// Add panic recovery to prevent crashes
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("body assertion panic: %v (path: %s)", r, e.Path)
+		}
+	}()
+
+	if r == nil {
+		return fmt.Errorf("http response is nil")
+	}
+
+	if r.Body == nil {
+		return fmt.Errorf("http response body is nil")
+	}
+
+	body, readErr := io.ReadAll(r.Body)
+	if readErr != nil {
+		return fmt.Errorf("failed to read body: %w", readErr)
 	}
 
 	r.Body.Close()
@@ -95,14 +182,14 @@ func (e TestBodyAssert) Test(r *http.Response, opts *TestBodyAssertTestOptions) 
 
 	// check whole body, $ = root
 	if e.Path == "$" {
-		done, err := e.testRoot(body, contains, notContains, equals, notEquals, matches, notMatches)
+		done, testErr := e.testRoot(body, contains, notContains, equals, notEquals, matches, notMatches)
 		if done {
-			return err
+			return testErr
 		}
 	} else {
-		err, done := e.testField(body, contains, notContains, equals, notEquals, matches, notMatches)
+		testErr, done := e.testField(body, contains, notContains, equals, notEquals, matches, notMatches)
 		if done {
-			return err
+			return testErr
 		}
 	}
 
@@ -124,6 +211,11 @@ func (e TestBodyAssert) testRoot(
 
 	if e.Present != nil && *e.Present && len(body) == 0 {
 		return false, fmt.Errorf("expected body to be present but its empty")
+	}
+
+	// Check if the response body is valid JSON before parsing
+	if !gjson.Valid(string(body)) {
+		return false, fmt.Errorf("response body is not valid JSON for root path assertion")
 	}
 
 	gjsonResult := gjson.ParseBytes(body)
@@ -267,20 +359,38 @@ func (e TestBodyAssert) testField(
 		return fmt.Errorf("expected value to NOT be present at path: %s", e.Path), false
 	}
 
-	if contains != "" && !strings.Contains(value.String(), contains) {
-		return fmt.Errorf("value does not contain: %s", e.Contains), true
+	// If there was an error getting the value or value is nil, we can't perform the remaining assertions
+	if err != nil || value == nil {
+		return nil, false
 	}
 
-	if notContains != "" && strings.Contains(value.String(), notContains) {
-		return fmt.Errorf("value contains: %s", notContains), true
+	// Additional safety check to ensure value pointer is valid
+	if value == nil {
+		return fmt.Errorf("nil value returned for path: %s", e.Path), true
 	}
 
-	if equals != "" && value.String() != equals {
-		return fmt.Errorf("value does not equal: %s", equals), true
+	if contains != "" {
+		if !strings.Contains(value.String(), contains) {
+			return fmt.Errorf("value does not contain: %s", contains), true
+		}
 	}
 
-	if notEquals != "" && value.String() == notEquals {
-		return fmt.Errorf("value equals: %s", notEquals), true
+	if notContains != "" {
+		if strings.Contains(value.String(), notContains) {
+			return fmt.Errorf("value contains: %s", notContains), true
+		}
+	}
+
+	if equals != "" {
+		if value.String() != equals {
+			return fmt.Errorf("value does not equal: %s", equals), true
+		}
+	}
+
+	if notEquals != "" {
+		if value.String() == notEquals {
+			return fmt.Errorf("value equals: %s", notEquals), true
+		}
 	}
 
 	if matches != "" {
@@ -400,6 +510,10 @@ func (e TestBodyAssert) testField(
 }
 
 func bodyMatches(matches string, value *gjson.Result) (result bool, err error) {
+	if value == nil {
+		return false, fmt.Errorf("cannot match regex against nil value")
+	}
+
 	regex, err := regexp.Compile(matches)
 	if err != nil {
 		return false, fmt.Errorf("invalid regex: %w", err)
@@ -413,7 +527,26 @@ func bodyMatches(matches string, value *gjson.Result) (result bool, err error) {
 }
 
 func (e TestBodyAssert) getValueFromPathWithBody(body []byte) (*gjson.Result, error) {
-	value := gjson.Get(string(body), e.Path)
+	if body == nil {
+		return nil, fmt.Errorf("cannot parse nil body")
+	}
+
+	if e.Path == "" {
+		return nil, fmt.Errorf("path cannot be empty")
+	}
+
+	// Safely convert body to string and parse with gjson
+	bodyStr := string(body)
+	if bodyStr == "" {
+		return nil, fmt.Errorf("empty response body")
+	}
+
+	// Check if the response body is valid JSON before parsing
+	if !gjson.Valid(bodyStr) {
+		return nil, fmt.Errorf("response body is not valid JSON (path: %s)", e.Path)
+	}
+
+	value := gjson.Get(bodyStr, e.Path)
 	if !value.Exists() {
 		return nil, fmt.Errorf("value not found at path: %q", e.Path)
 	}

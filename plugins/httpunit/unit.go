@@ -1,17 +1,23 @@
-package httpplugin
+package httpunit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	"github.com/exapsy/ene/e2eframe"
 	"github.com/joho/godotenv"
@@ -19,6 +25,78 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 	"gopkg.in/yaml.v3"
 )
+
+// UserFriendlyError interface for errors that can provide simplified messages
+type UserFriendlyError interface {
+	UserFriendlyMessage() string
+}
+
+type EnvFileLoadingError struct {
+	path string
+	err  error
+}
+
+func (e *EnvFileLoadingError) Error() string {
+	return fmt.Sprintf("failed to load env file: %s", e.path)
+}
+
+func (e *EnvFileLoadingError) UserFriendlyMessage() string {
+	return "could not find env file"
+}
+
+func (e *EnvFileLoadingError) Unwrap() error {
+	return e.err
+}
+
+type ContainerCreationError struct {
+	containerName string
+	err           error
+}
+
+func (e *ContainerCreationError) Error() string {
+	return fmt.Sprintf("failed to create container %s: %v", e.containerName, e.err)
+}
+
+func (e *ContainerCreationError) UserFriendlyMessage() string {
+	return "failed to start container"
+}
+
+func (e *ContainerCreationError) Unwrap() error {
+	return e.err
+}
+
+type PortAllocationError struct {
+	err error
+}
+
+func (e *PortAllocationError) Error() string {
+	return fmt.Sprintf("failed to allocate port: %v", e.err)
+}
+
+func (e *PortAllocationError) UserFriendlyMessage() string {
+	return "no available ports"
+}
+
+func (e *PortAllocationError) Unwrap() error {
+	return e.err
+}
+
+type DockerfileNotFoundError struct {
+	path string
+	err  error
+}
+
+func (e *DockerfileNotFoundError) Error() string {
+	return fmt.Sprintf("dockerfile not found: %s", e.path)
+}
+
+func (e *DockerfileNotFoundError) UserFriendlyMessage() string {
+	return "dockerfile not found"
+}
+
+func (e *DockerfileNotFoundError) Unwrap() error {
+	return e.err
+}
 
 const (
 	UnitKind e2eframe.UnitKind = "http"
@@ -56,7 +134,10 @@ type HTTPUnit struct {
 	endpoint        string
 	verbose         bool
 
-	// For capturing logs
+	// Performance optimizations
+	buildSemaphore chan struct{}
+
+	// logging
 	logs    []string
 	logLock sync.Mutex
 }
@@ -172,6 +253,13 @@ func New(cfg map[string]any) (e2eframe.Unit, error) {
 		}
 	}
 
+	// Initialize performance optimizations with sensible defaults
+	maxConcurrentBuilds := runtime.NumCPU()
+	if maxConcurrentBuilds < 1 {
+		maxConcurrentBuilds = 1
+	}
+	buildSemaphore := make(chan struct{}, maxConcurrentBuilds)
+
 	return &HTTPUnit{
 		name:            name,
 		Command:         cmd,
@@ -182,6 +270,7 @@ func New(cfg map[string]any) (e2eframe.Unit, error) {
 		Dockerfile:      dockerfile,
 		Image:           image,
 		StartupTimeout:  startupTimeout,
+		buildSemaphore:  buildSemaphore,
 	}, nil
 }
 
@@ -200,12 +289,18 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 	if s.EnvFile != "" {
 		envFile := filepath.Join(opts.WorkingDir, s.EnvFile)
 		if err := godotenv.Load(envFile); err != nil {
-			return fmt.Errorf("could not load env file: %w", err)
+			return &EnvFileLoadingError{
+				path: envFile,
+				err:  err,
+			}
 		}
 
 		envs, err = godotenv.Read(envFile)
 		if err != nil {
-			return fmt.Errorf("could not read env file: %w", err)
+			return &EnvFileLoadingError{
+				path: envFile,
+				err:  err,
+			}
 		}
 	}
 
@@ -254,12 +349,45 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 		logConsumers = []testcontainers.LogConsumer{logCapture}
 	}
 
+	// Cleanup old cached images if requested
+	if opts.CleanupCache {
+		if err := s.cleanupOldCachedImages(ctx); err != nil {
+			// Log warning but don't fail the test
+			fmt.Printf("Warning: failed to cleanup old cached images: %v\n", err)
+		}
+	}
+
 	var fromDockerfile testcontainers.FromDockerfile
 	if s.Dockerfile != "" {
+		// Acquire build semaphore to limit concurrent builds
+		s.buildSemaphore <- struct{}{}
+		defer func() { <-s.buildSemaphore }()
+
+		// Generate smart content-based tag for better cache behavior
+		contentHash, err := s.generateSmartContentHash(dockerBaseDir)
+		if err != nil {
+			return fmt.Errorf("failed to generate smart content hash: %w", err)
+		}
+
 		fromDockerfile = testcontainers.FromDockerfile{
 			Context:        dockerBaseDir,
 			Dockerfile:     s.Dockerfile,
 			BuildLogWriter: buildLogWriter,
+			Repo:           fmt.Sprintf("ene-%s", s.name),
+			Tag:            contentHash,
+			BuildOptionsModifier: func(buildOptions *types.ImageBuildOptions) {
+				// Enable BuildKit for better performance
+				buildOptions.Version = types.BuilderBuildKit
+				buildOptions.BuildArgs = map[string]*string{
+					"BUILDKIT_PROGRESS": stringPtr("plain"),
+					"DOCKER_BUILDKIT":   stringPtr("1"),
+				}
+
+				// Add no-cache option for debugging only
+				if opts.Debug {
+					buildOptions.NoCache = true
+				}
+			},
 		}
 		if opts.CacheImages {
 			fromDockerfile.KeepImage = true
@@ -274,7 +402,7 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 	// Create host port
 	freePort, err := e2eframe.GetFreePort()
 	if err != nil {
-		return fmt.Errorf("get free port: %w", err)
+		return &PortAllocationError{err: err}
 	}
 
 	s.Port = freePort
@@ -289,8 +417,18 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 		Image:          image,
 		FromDockerfile: fromDockerfile,
 		HostConfigModifier: func(hostConfig *container.HostConfig) {
-			hostConfig.Memory = 2 * 512 * 1024 * 1024     // 512 MB max
-			hostConfig.MemorySwap = 2 * 512 * 1024 * 1024 // no swap beyond that
+			// Use sensible resource limits (512MB memory, 0.5 CPU)
+			memoryBytes := int64(512 * 1024 * 1024)
+			hostConfig.Memory = memoryBytes
+			hostConfig.MemorySwap = memoryBytes // no additional swap
+
+			// Set CPU limits
+			hostConfig.CPUQuota = int64(0.5 * 100000)
+			hostConfig.CPUPeriod = 100000
+
+			// Optimize for faster startup
+			hostConfig.AutoRemove = true
+
 			hostConfig.PortBindings = map[nat.Port][]nat.PortBinding{
 				appPortNat: {
 					{
@@ -313,7 +451,8 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 		WaitingFor: wait.
 			ForHTTP(s.HealthcheckPath).
 			WithPort(appPortNat).
-			WithStartupTimeout(s.StartupTimeout),
+			WithStartupTimeout(s.StartupTimeout).
+			WithPollInterval(100 * time.Millisecond), // Faster polling for quicker detection
 	}
 
 	s.sendEvent(
@@ -327,7 +466,7 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 		Started:          true,
 	})
 	if err != nil {
-		return fmt.Errorf("create container: %w", err)
+		return &ContainerCreationError{containerName: s.name, err: err}
 	}
 
 	s.sendEvent(
@@ -385,7 +524,22 @@ func (s *HTTPUnit) WaitForReady(ctx context.Context) error {
 
 func (s *HTTPUnit) Stop() error {
 	if s.cont != nil {
-		return s.cont.Terminate(context.Background())
+		// First try to stop gracefully with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// Try graceful stop first
+		if err := s.cont.Stop(ctx, nil); err != nil {
+			// If graceful stop fails, force terminate
+			terminateCtx, terminateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer terminateCancel()
+
+			if termErr := s.cont.Terminate(terminateCtx); termErr != nil {
+				return fmt.Errorf("failed to stop container gracefully (%v) and terminate (%v)", err, termErr)
+			}
+		}
+
+		s.cont = nil
 	}
 
 	return nil
@@ -491,4 +645,235 @@ func (c *httpLogConsumer) GetLogs() []string {
 	defer c.unit.logLock.Unlock()
 
 	return c.unit.logs
+}
+
+// generateSmartContentHash creates an optimized deterministic hash based on the build context
+// This ensures that Docker images are rebuilt only when relevant source code changes
+func (s *HTTPUnit) generateSmartContentHash(contextPath string) (string, error) {
+	hash := sha256.New()
+
+	err := filepath.Walk(contextPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories and files that don't affect builds
+		if info.IsDir() || s.shouldIgnoreFile(path, info) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		relPath, err := filepath.Rel(contextPath, path)
+		if err != nil {
+			return err
+		}
+
+		// Include file metadata
+		hash.Write([]byte(relPath))
+		hash.Write([]byte(fmt.Sprintf("%d", info.ModTime().Unix())))
+		hash.Write([]byte(fmt.Sprintf("%d", info.Size())))
+
+		// For important source files, include content
+		if s.isImportantSourceFile(filepath.Ext(info.Name())) {
+			if err := s.hashFileContent(hash, path, info.Size()); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to generate smart hash for %s: %w", contextPath, err)
+	}
+
+	result := hex.EncodeToString(hash.Sum(nil))[:12]
+	return result, nil
+}
+
+// shouldIgnoreFile checks if a file should be ignored for build context hashing
+func (s *HTTPUnit) shouldIgnoreFile(path string, info os.FileInfo) bool {
+	name := info.Name()
+
+	// Skip hidden files and directories (except important ones)
+	if strings.HasPrefix(name, ".") && name != ".dockerignore" && name != ".env" {
+		return true
+	}
+
+	// Skip common non-build files
+	skipPatterns := []string{
+		"**/.git/**", "**/node_modules/**", "**/vendor/**", "**/target/**",
+		"**/*.log", "**/*.tmp", "**/.DS_Store", "**/tmp/**", "**/.cache/**",
+		"**/coverage/**", "**/.nyc_output/**", "**/test-results/**",
+		"**/dist/**", "**/build/**", "**/out/**", "**/bin/**", "**/obj/**",
+	}
+
+	for _, pattern := range skipPatterns {
+		if matched, _ := filepath.Match(pattern, path); matched {
+			return true
+		}
+		if matched, _ := filepath.Match(pattern, name); matched {
+			return true
+		}
+	}
+
+	// Skip temporary/cache file extensions
+	skipSuffixes := []string{".log", ".tmp", ".cache", ".pid", ".lock", ".swp"}
+	for _, suffix := range skipSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isImportantSourceFile determines if file content should be included in hash
+func (s *HTTPUnit) isImportantSourceFile(ext string) bool {
+	importantExts := map[string]bool{
+		".go": true, ".mod": true, ".sum": true,
+		".js": true, ".ts": true, ".json": true,
+		".py": true, ".rb": true, ".php": true,
+		".dockerfile": true, ".Dockerfile": true,
+		".yaml": true, ".yml": true, ".toml": true,
+		".sql": true, ".sh": true, ".env": true,
+		".html": true, ".css": true, ".scss": true,
+	}
+
+	return importantExts[ext]
+}
+
+// hashFileContent adds file content to hash with size optimization
+func (s *HTTPUnit) hashFileContent(hash io.Writer, path string, size int64) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// For large files (>1MB), only hash first and last chunks for performance
+	if size > 1024*1024 {
+		// Hash first 64KB
+		buffer := make([]byte, 64*1024)
+		n, _ := file.Read(buffer)
+		hash.Write(buffer[:n])
+
+		// Hash last 64KB
+		file.Seek(-64*1024, io.SeekEnd)
+		n, _ = file.Read(buffer)
+		hash.Write(buffer[:n])
+	} else {
+		// Hash entire file
+		_, err = io.Copy(hash, file)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// isSourceFile determines if a file extension indicates a source file
+// that should have its content included in the hash
+func isSourceFile(ext string) bool {
+	sourceExtensions := map[string]bool{
+		".go": true, ".js": true, ".ts": true, ".py": true, ".java": true,
+		".c": true, ".cpp": true, ".h": true, ".hpp": true, ".rs": true,
+		".rb": true, ".php": true, ".cs": true, ".swift": true, ".kt": true,
+		".scala": true, ".clj": true, ".hs": true, ".ml": true, ".fs": true,
+		".dockerfile": true, ".Dockerfile": true, ".yaml": true, ".yml": true,
+		".json": true, ".toml": true, ".ini": true, ".conf": true, ".cfg": true,
+		".sql": true, ".sh": true, ".bash": true, ".zsh": true, ".fish": true,
+		".ps1": true, ".bat": true, ".cmd": true, ".html": true, ".css": true,
+		".scss": true, ".sass": true, ".less": true, ".vue": true, ".jsx": true,
+		".tsx": true, ".svelte": true, ".md": true, ".txt": true, ".xml": true,
+	}
+
+	return sourceExtensions[ext]
+}
+
+// stringPtr is a helper function to create a string pointer
+func stringPtr(s string) *string {
+	return &s
+}
+
+// cleanupOldCachedImages removes old ene-prefixed images to prevent cache bloat
+func (s *HTTPUnit) cleanupOldCachedImages(ctx context.Context) error {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return fmt.Errorf("failed to create Docker client: %w", err)
+	}
+	defer cli.Close()
+
+	// List all images with our repo prefix
+	images, err := cli.ImageList(ctx, image.ListOptions{
+		All: true,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list images: %w", err)
+	}
+
+	repoPrefix := fmt.Sprintf("ene-%s", s.name)
+	var imagesToRemove []image.Summary
+	var totalSize int64
+
+	// Collect images to potentially remove
+	for _, img := range images {
+		for _, repoTag := range img.RepoTags {
+			if strings.HasPrefix(repoTag, repoPrefix+":") {
+				imagesToRemove = append(imagesToRemove, img)
+				totalSize += img.Size
+				break
+			}
+		}
+	}
+
+	// Use sensible defaults for cleanup strategy
+	maxCacheSize := int64(2048 * 1024 * 1024) // 2GB cache limit
+	maxAge := 24 * time.Hour                  // Keep images for 24 hours
+
+	// Sort by creation date (newest first)
+	if len(imagesToRemove) > 1 {
+		for i := 0; i < len(imagesToRemove)-1; i++ {
+			for j := i + 1; j < len(imagesToRemove); j++ {
+				if imagesToRemove[i].Created < imagesToRemove[j].Created {
+					imagesToRemove[i], imagesToRemove[j] = imagesToRemove[j], imagesToRemove[i]
+				}
+			}
+		}
+	}
+
+	// Remove images based on cache size and age
+	var removedSize int64
+	keepCount := 0
+	currentTime := time.Now()
+
+	for _, img := range imagesToRemove {
+		imgAge := currentTime.Sub(time.Unix(img.Created, 0))
+
+		// Keep at least 2 recent images, remove if over cache size or too old
+		if keepCount >= 2 && (removedSize+img.Size > maxCacheSize || imgAge > maxAge) {
+			_, err := cli.ImageRemove(ctx, img.ID, image.RemoveOptions{
+				Force:         false,
+				PruneChildren: true,
+			})
+			if err != nil {
+				// Log but continue with other images
+				if s.verbose {
+					fmt.Printf("Warning: failed to remove image %s: %v\n", img.ID, err)
+				}
+			} else {
+				removedSize += img.Size
+				if s.verbose {
+					fmt.Printf("Removed cached image %s (%.2f MB, age: %v)\n",
+						img.ID[:12], float64(img.Size)/1024/1024, imgAge)
+				}
+			}
+		} else {
+			keepCount++
+		}
+	}
+
+	return nil
 }

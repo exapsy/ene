@@ -108,18 +108,23 @@ func (u *Unit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) error
 
 	routeMethodHandler := map[string]map[string]func(http.ResponseWriter, *http.Request){}
 	for _, route := range u.Routes {
-		if routeMethodHandler[route.Path] == nil {
-			routeMethodHandler[route.Path] = map[string]func(http.ResponseWriter, *http.Request){}
+		// Interpolate fixtures in route path
+		interpolatedPath := u.interpolateFixtures(route.Path, opts.Fixtures)
+
+		if routeMethodHandler[interpolatedPath] == nil {
+			routeMethodHandler[interpolatedPath] = map[string]func(http.ResponseWriter, *http.Request){}
 		}
 
-		routeMethodHandler[route.Path][route.Method] = func(w http.ResponseWriter, r *http.Request) {
+		routeMethodHandler[interpolatedPath][route.Method] = func(w http.ResponseWriter, r *http.Request) {
 			body := route.Response.Body
 			status := route.Response.Status
 			headers := route.Response.Headers
 
-			// Set headers
+			// Set headers with fixture interpolation
 			for headerName, headerValue := range headers {
-				w.Header().Set(headerName, headerValue)
+				interpolatedHeaderName := u.interpolateFixtures(headerName, opts.Fixtures)
+				interpolatedHeaderValue := u.interpolateFixtures(headerValue, opts.Fixtures)
+				w.Header().Set(interpolatedHeaderName, interpolatedHeaderValue)
 			}
 
 			// Send response w/ status
@@ -128,7 +133,8 @@ func (u *Unit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) error
 			// Write body
 			switch b := body.(type) {
 			case string:
-				w.Write([]byte(b))
+				interpolatedBody := u.interpolateFixtures(b, opts.Fixtures)
+				w.Write([]byte(interpolatedBody))
 			case map[string]interface{}:
 				bytes, err := json.Marshal(b)
 				if err != nil {
@@ -143,8 +149,10 @@ func (u *Unit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) error
 	// setup routes
 	mux := http.NewServeMux()
 	for _, route := range u.Routes {
-		mux.HandleFunc(route.Path, func(w http.ResponseWriter, r *http.Request) {
-			routeMethodHandler[route.Path][r.Method](w, r)
+		// Use interpolated path for route registration
+		interpolatedPath := u.interpolateFixtures(route.Path, opts.Fixtures)
+		mux.HandleFunc(interpolatedPath, func(w http.ResponseWriter, r *http.Request) {
+			routeMethodHandler[interpolatedPath][r.Method](w, r)
 		})
 	}
 
@@ -210,6 +218,19 @@ func (u *Unit) GetEnvRaw(_ *e2eframe.GetEnvRawOptions) map[string]string {
 
 func (u *Unit) SetEnvs(env map[string]string) {
 	// noop
+}
+
+func (u *Unit) interpolateFixtures(str string, fixtures []e2eframe.Fixture) string {
+	if str == "" {
+		return str
+	}
+
+	interpolationRegex := e2eframe.FixtureInterpolationRegex
+	if interpolationRegex.MatchString(str) {
+		return e2eframe.InterpolateString(interpolationRegex, str, fixtures)
+	}
+
+	return str
 }
 
 func (u *Unit) sendEvent(sink e2eframe.EventSink, eventType e2eframe.EventType, message string) {

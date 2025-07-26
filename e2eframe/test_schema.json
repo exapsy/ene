@@ -9,6 +9,23 @@
     "name": {
       "type": "string"
     },
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": ["name", "value"],
+        "additionalProperties": false
+      }
+    },
     "units": {
       "type": "array",
       "items": {
@@ -21,7 +38,9 @@
             "type": "string",
             "enum": [
               "mongo",
-              "http"
+              "http",
+              "postgres",
+              "httpmock"
             ]
           },
           "image": {
@@ -61,6 +80,36 @@
           "startup_timeout": {
             "type": "string",
             "description": "optional startup timeout for the unit"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "method": {
+                  "type": "string"
+                },
+                "response": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "integer"
+                    },
+                    "body": {},
+                    "headers": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": ["path", "method", "response"]
+            }
           }
         },
         "if": {
@@ -96,7 +145,8 @@
         "type": "object",
         "properties": {
           "name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "kind": {
             "type": "string",
@@ -128,21 +178,18 @@
                 "type": "string"
               },
               "body": {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "enum": [
-                      "json",
-                      "form"
-                    ]
-                  },
-                  "data": {
-                    "type": "object"
-                  }
-                }
+                "type": "string"
+              },
+              "timeout": {
+                "type": "string"
               },
               "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "query_params": {
                 "type": "object",
                 "additionalProperties": {
                   "type": "string"
@@ -156,16 +203,18 @@
           "expect": {
             "type": "object",
             "properties": {
-              "status": {
+              "status_code": {
                 "type": "integer"
               },
-              "body_assertions": {
+              "body_asserts": {
                 "type": "array",
                 "items": {
                   "type": "object",
                   "properties": {
                     "path": {
-                      "type": "string"
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "JSON path to the field being tested"
                     },
                     "equals": {
                       "type": "string"
@@ -187,11 +236,39 @@
                     },
                     "present": {
                       "type": "boolean"
+                    },
+                    "size": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "greater_than": {
+                      "type": "integer"
+                    },
+                    "less_than": {
+                      "type": "integer"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": ["string", "int", "float", "bool", "array", "object"]
                     }
-                  }
+                  },
+                  "required": ["path"],
+                  "anyOf": [
+                    {"required": ["equals"]},
+                    {"required": ["not_equals"]},
+                    {"required": ["contains"]},
+                    {"required": ["not_contains"]},
+                    {"required": ["matches"]},
+                    {"required": ["not_matches"]},
+                    {"required": ["present"]},
+                    {"required": ["size"]},
+                    {"required": ["greater_than"]},
+                    {"required": ["less_than"]},
+                    {"required": ["type"]}
+                  ]
                 }
               },
-              "header_assertions": {
+              "header_asserts": {
                 "type": "array",
                 "items": {
                   "type": "object",
@@ -220,12 +297,21 @@
                     "present": {
                       "type": "boolean"
                     }
-                  }
+                  },
+                  "required": ["name"],
+                  "anyOf": [
+                    {"required": ["equals"]},
+                    {"required": ["not_equals"]},
+                    {"required": ["contains"]},
+                    {"required": ["not_contains"]},
+                    {"required": ["matches"]},
+                    {"required": ["not_matches"]},
+                    {"required": ["present"]}
+                  ]
                 }
               }
             },
-            "required": [
-            ]
+            "required": ["status_code"]
           }
         },
         "required": [

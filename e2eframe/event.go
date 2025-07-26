@@ -81,6 +81,10 @@ type TestEvent struct {
 	Duration time.Duration
 }
 
+func (te *TestEvent) Unwrap() error {
+	return te.Error
+}
+
 type TestRetryingEvent struct {
 	BaseEvent
 	TestName   string
@@ -107,4 +111,14 @@ func NewEventChannel() chan Event {
 type SuiteSkippedEvent struct {
 	BaseEvent
 	TotalSuiteTests int
+}
+
+// SuiteErrorEvent represents suite error events with preserved original error
+type SuiteErrorEvent struct {
+	BaseEvent
+	Error error
+}
+
+func (e SuiteErrorEvent) Unwrap() error {
+	return e.Error
 }

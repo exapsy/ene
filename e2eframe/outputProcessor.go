@@ -33,6 +33,7 @@ type StdoutHumanOutputProcessor struct {
 	// Pretty indicates whether to pretty-print the output with colors and formatting.
 	Pretty  bool
 	Verbose bool
+	Debug   bool
 	color   Color
 	// testsSecretary is used to keep track of running tests and their statuses.
 	testsSecretary *TestsSecretary
@@ -45,6 +46,8 @@ type StdoutHumanOutputProcessorParams struct {
 	Pretty bool
 	// Verbose indicates whether to print detailed information about the test execution.
 	Verbose bool
+	// Debug indicates whether to print full error details
+	Debug bool
 	// TestsSecretary is used to keep track of running tests and their statuses.
 	TestsSecretary *TestsSecretary
 }
@@ -56,6 +59,7 @@ func NewStdoutHumanOutputProcessor(params StdoutHumanOutputProcessorParams) Outp
 		// Formatting options
 		Pretty:  params.Pretty,
 		Verbose: params.Verbose,
+		Debug:   params.Debug,
 
 		color:          NewColor(params.Pretty),
 		testsSecretary: params.TestsSecretary,
@@ -124,17 +128,34 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 
 	case EventTestCompleted:
 		if testEvent, ok := event.(*TestEvent); ok {
-			if testEvent.Passed {
-				p.printf("%s  ✓ TEST PASSED:%s %s (%.2fs)\n",
-					color.Green, color.Reset, testEvent.TestName, testEvent.Duration.Seconds())
+			// Only show real-time test results in verbose mode
+			if !p.Verbose {
+				return nil
+			}
+
+			// Verbose mode: show all test results
+			duration := testEvent.Duration
+			timeStr := ""
+			if duration < time.Second {
+				timeStr = fmt.Sprintf("%.0fms", duration.Seconds()*1000)
 			} else {
-				p.printf("%s  ✖ TEST FAILED:%s %s (%.2fs) - %s\n",
-					color.Red, color.Reset, testEvent.TestName, testEvent.Duration.Seconds(), testEvent.Message())
+				timeStr = fmt.Sprintf("%.2fs", duration.Seconds())
+			}
+
+			if testEvent.Passed {
+				p.printf("%s  ✓ TEST PASSED:%s %s (%s)\n",
+					color.Green, color.Reset, testEvent.TestName, timeStr)
+			} else {
+				p.printf("%s  ✖ TEST FAILED:%s %s (%s) - %s\n",
+					color.Red, color.Reset, testEvent.TestName, timeStr, testEvent.Message())
 			}
 		}
 
 	case EventTestRetrying:
 		if testEvent, ok := event.(*TestRetryingEvent); ok {
+			if !p.Verbose {
+				return nil
+			}
 			retryCount := testEvent.RetryCount
 			maxRetries := testEvent.MaxRetries
 			p.printf("%s  🔄 TEST RETRYING:%s %s (attempt %d/%d)\n",
@@ -150,7 +171,18 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 		}
 
 	case EventSuiteError:
-		if suiteEvent, ok := event.(*BaseEvent); ok {
+		if suiteEvent, ok := event.(*SuiteErrorEvent); ok {
+			// Format error message based on debug mode
+			var errorMsg string
+			if suiteEvent.Error != nil {
+				errorMsg = FormatError(suiteEvent.Error, p.Debug)
+			} else {
+				errorMsg = suiteEvent.Message()
+			}
+			p.printf("%s✖ SUITE ERROR:%s %s - %s\n",
+				color.Red, color.Reset, suiteEvent.SuiteName(), errorMsg)
+		} else if suiteEvent, ok := event.(*BaseEvent); ok {
+			// Fallback for old BaseEvent type
 			p.printf("%s✖ SUITE ERROR:%s %s - %s\n",
 				color.Red, color.Reset, suiteEvent.SuiteName(), suiteEvent.Message())
 		}
@@ -206,7 +238,14 @@ func (p *StdoutHumanOutputProcessor) Flush() error {
 			fmt.Printf("%s%s✓ Suite: %s%s\n", color.Bold, color.Green, suiteName, color.Reset)
 
 			for _, test := range tests {
-				fmt.Printf("  %s%s✓ %s%s\n", color.Bold, color.Green, test.TestName, color.Reset)
+				duration := test.Duration
+				timeStr := ""
+				if duration < time.Second {
+					timeStr = fmt.Sprintf("%.0fms", duration.Seconds()*1000)
+				} else {
+					timeStr = fmt.Sprintf("%.2fs", duration.Seconds())
+				}
+				fmt.Printf("  %s%s✓ %s%s (%s)\n", color.Bold, color.Green, test.TestName, color.Reset, timeStr)
 			}
 		}
 	}
@@ -235,11 +274,31 @@ func (p *StdoutHumanOutputProcessor) Flush() error {
 				color.Bold, color.Yellow, suiteName, color.Reset)
 
 			for _, failure := range suiteFailures {
-				fmt.Printf("\n  %s%s✖ Test: %s%s\n",
-					color.Bold, color.Red, failure.TestName, color.Reset)
+				duration := failure.Duration
+				timeStr := ""
+				if duration < time.Second {
+					timeStr = fmt.Sprintf("%.0fms", duration.Seconds()*1000)
+				} else {
+					timeStr = fmt.Sprintf("%.2fs", duration.Seconds())
+				}
+				fmt.Printf("\n  %s%s✖ Test: %s%s (%s)\n",
+					color.Bold, color.Red, failure.TestName, color.Reset, timeStr)
+
+				if !failure.Passed && failure.Message() == "" {
+					fmt.Printf("    %s%sNo error message provided%s\n",
+						color.Bold, color.Red, color.Reset)
+					continue
+				}
+
+				// Check if has friedly error message
+				msg := FormatError(failure.Error, p.Debug)
+				if msg != "" {
+					fmt.Printf("    %s%s%s%s\n",
+						color.Bold, color.Red, msg, color.Reset)
+					continue
+				}
 
 				// Split error messages if there are multiple
-
 				errorMsg := failure.Message()
 				if strings.TrimSpace(errorMsg) == "" {
 					continue
@@ -329,7 +388,7 @@ type HTMLReportProcessorParams struct {
 func NewHTMLReportProcessor(params HTMLReportProcessorParams) (OutputProcessor, error) {
 	// Create output directory if it doesn't exist
 	dir := filepath.Dir(params.OutputFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output directory: %w", err)
 	}
 
@@ -439,7 +498,7 @@ type JSONReportProcessorParams struct {
 func NewJSONReportProcessor(params JSONReportProcessorParams) (OutputProcessor, error) {
 	// Create output directory if it doesn't exist
 	dir := filepath.Dir(params.OutputFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output directory: %w", err)
 	}
 

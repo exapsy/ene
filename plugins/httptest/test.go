@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -25,11 +26,12 @@ type TestSuiteTest struct {
 }
 
 type TestSuiteTestRequest struct {
-	Path    string            `yaml:"path"`
-	Method  string            `yaml:"method"`
-	Body    string            `yaml:"body"`
-	Headers map[string]string `yaml:"headers"`
-	Timeout string            `yaml:"timeout"`
+	Path        string            `yaml:"path"`
+	Method      string            `yaml:"method"`
+	Body        string            `yaml:"body"`
+	Headers     map[string]string `yaml:"headers"`
+	QueryParams map[string]string `yaml:"query_params"`
+	Timeout     string            `yaml:"timeout"`
 }
 
 type TestSuiteTestExpect struct {
@@ -44,6 +46,67 @@ func (t *TestSuiteTest) Name() string {
 
 func (t *TestSuiteTest) Kind() string {
 	return t.TestKind
+}
+
+func (t *TestSuiteTest) GetPathWithFixtures(fixtures []e2eframe.Fixture) string {
+	if t.Request.Path == "" {
+		return "/"
+	}
+
+	interpolationRegex := e2eframe.FixtureInterpolationRegex
+	if interpolationRegex.MatchString(t.Request.Path) {
+		return e2eframe.InterpolateString(interpolationRegex, t.Request.Path, fixtures)
+	}
+
+	return t.Request.Path
+}
+
+func (t *TestSuiteTest) GetHeadersWithFixtures(fixtures []e2eframe.Fixture) map[string]string {
+	if len(t.Request.Headers) == 0 {
+		return t.Request.Headers
+	}
+
+	interpolatedHeaders := make(map[string]string)
+	interpolationRegex := e2eframe.FixtureInterpolationRegex
+
+	for key, value := range t.Request.Headers {
+		interpolatedKey := key
+		interpolatedValue := value
+
+		if interpolationRegex.MatchString(key) {
+			interpolatedKey = e2eframe.InterpolateString(interpolationRegex, key, fixtures)
+		}
+
+		if interpolationRegex.MatchString(value) {
+			interpolatedValue = e2eframe.InterpolateString(interpolationRegex, value, fixtures)
+		}
+
+		interpolatedHeaders[interpolatedKey] = interpolatedValue
+	}
+
+	return interpolatedHeaders
+}
+
+func (t *TestSuiteTest) GetQueryParamsWithFixtures(fixtures []e2eframe.Fixture) map[string]string {
+	interpolatedQueryParams := make(map[string]string)
+	interpolationRegex := e2eframe.FixtureInterpolationRegex
+
+	for key, value := range t.Request.QueryParams {
+		interpolatedKey := key
+		interpolatedValue := value
+
+		if interpolationRegex.MatchString(key) {
+			interpolatedKey = e2eframe.InterpolateString(interpolationRegex, key, fixtures)
+		}
+
+		if interpolationRegex.MatchString(value) {
+			interpolatedValue = e2eframe.InterpolateString(interpolationRegex, value, fixtures)
+		}
+
+		interpolatedQueryParams[interpolatedKey] = interpolatedValue
+	}
+
+	return interpolatedQueryParams
 }
 
 func (t *TestSuiteTest) GetBodyWithFixtures(fixtures []e2eframe.Fixture) io.ReadCloser {
@@ -65,15 +128,32 @@ func (t *TestSuiteTest) Run(
 	ctx context.Context,
 	opts *e2eframe.TestSuiteTestRunOptions,
 ) (*e2eframe.TestResult, error) {
-	fullURL := fmt.Sprintf("%s%s", t.TargetEndpoint, t.Request.Path)
+	path := t.GetPathWithFixtures(opts.Fixtures)
 	body := t.GetBodyWithFixtures(opts.Fixtures)
+	headers := t.GetHeadersWithFixtures(opts.Fixtures)
+	queryParams := t.GetQueryParamsWithFixtures(opts.Fixtures)
+
+	// Build URL with query parameters
+	fullURL := fmt.Sprintf("%s%s", t.TargetEndpoint, path)
+	if len(queryParams) > 0 {
+		u, err := url.Parse(fullURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse URL: %v", err)
+		}
+		q := u.Query()
+		for key, value := range queryParams {
+			q.Set(key, value)
+		}
+		u.RawQuery = q.Encode()
+		fullURL = u.String()
+	}
 
 	req, err := http.NewRequestWithContext(ctx, t.Request.Method, fullURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("new request: %v", err)
 	}
 
-	for key, value := range t.Request.Headers {
+	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
 

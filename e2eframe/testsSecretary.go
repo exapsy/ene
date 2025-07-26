@@ -63,11 +63,29 @@ func (s *TestsSecretary) ConsumeEvent(event Event) error {
 			return fmt.Errorf("expected SuiteSkippedEvent, got %T", event)
 		}
 	case EventSuiteError:
+		var err error
+		// add it to completed tests as a failed test
 		if _, ok := event.(*BaseEvent); ok {
 			s.totalFailedTests++
+		} else if errEvt, ok := event.(*SuiteErrorEvent); ok {
+			s.totalFailedTests++
+			err = errEvt.Error
 		} else {
-			return fmt.Errorf("expected BaseEvent, got %T", event)
+			return fmt.Errorf("expected BaseEvent or SuiteErrorEvent, got %T", event)
 		}
+
+		failedTest := TestEvent{
+			BaseEvent: BaseEvent{
+				EventType:    "TestCompleted",
+				EventTime:    time.Now(),
+				Suite:        event.SuiteName(),
+				EventMessage: event.Message(),
+			},
+			TestName: event.SuiteName(),
+			Passed:   false,
+			Error:    err,
+		}
+		s.completedTests = append(s.completedTests, failedTest)
 	}
 
 	return nil

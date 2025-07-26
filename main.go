@@ -15,10 +15,16 @@ import (
 	_ "github.com/exapsy/ene/plugins/httptest"
 	_ "github.com/exapsy/ene/plugins/httpunit"
 	_ "github.com/exapsy/ene/plugins/mongounit"
+	_ "github.com/exapsy/ene/plugins/postgresunit"
 	"github.com/spf13/cobra"
 )
 
 var (
+	// Version information - set at build time via ldflags
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+
 	colorReset  = "\033[0m"
 	colorRed    = "\033[31m"
 	colorGreen  = "\033[32m"
@@ -31,15 +37,17 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "e2e",
-	Short: "Run e2e tests or scaffold a new suite",
-	Long:  `When called with no sub-command, runs all e2e tests. Use "e2e scaffold-test" to create a new suite.`,
+	Use:     "e2e",
+	Short:   "Run e2e tests or scaffold a new suite",
+	Long:    `When called with no sub-command, runs all e2e tests. Use "e2e scaffold-test" to create a new suite.`,
+	Version: version,
 	Run: func(cmd *cobra.Command, args []string) {
 		verbose := cmd.Flag("verbose").Value.String()
 		pretty := cmd.Flag("pretty").Value.String()
 		parallel := cmd.Flag("parallel").Value.String()
 		suiteFlag := cmd.Flag("suite").Value.String()
 		debug := cmd.Flag("debug").Value.String()
+		cleanupCache := cmd.Flag("cleanup-cache").Value.String()
 		suitesFilter := strings.Split(suiteFlag, ",")
 		htmlReportPath := cmd.Flag("html").Value.String()
 		jsonReportPath := cmd.Flag("json").Value.String()
@@ -48,6 +56,7 @@ var rootCmd = &cobra.Command{
 		isVerbose := verbose == "true"
 		isPretty := pretty == "true"
 		isParallel := parallel == "true"
+		isCleanupCache := cleanupCache == "true"
 		isDebug := debug == "true"
 
 		// Function to check if a test should be included based on filter
@@ -69,15 +78,20 @@ var rootCmd = &cobra.Command{
 		eventChan := e2eframe.NewEventChannel()
 		var eventSink e2eframe.EventSink = eventChan
 
+		// Use optimized defaults for better performance
+		maxRetries := 3       // Keep reliable retry behavior
+		isCleanupCache = true // Always cleanup for better performance
+
 		err := e2eframe.Run(context.Background(), &e2eframe.RunOpts{
-			FilterFunc: shouldIncludeTest,
-			Verbose:    isVerbose,
-			Parallel:   isParallel,
-			Events:     eventSink,
-			MaxRetries: 3,       // Retry failed tests up to 3 times
-			RetryDelay: "2s",    // Delay between retries
-			Debug:      isDebug, // Set to true for debug mode
-			BaseDir:    baseDir,
+			FilterFunc:   shouldIncludeTest,
+			Verbose:      isVerbose,
+			Parallel:     isParallel,
+			Events:       eventSink,
+			MaxRetries:   maxRetries,
+			RetryDelay:   "2s",
+			Debug:        isDebug,
+			BaseDir:      baseDir,
+			CleanupCache: isCleanupCache,
 		})
 		if err != nil {
 			fmt.Printf("%s%s✖ ERROR: %v%s\n", colorBold, colorRed, err, colorReset)
@@ -90,6 +104,7 @@ var rootCmd = &cobra.Command{
 			e2eframe.NewStdoutHumanOutputProcessor(e2eframe.StdoutHumanOutputProcessorParams{
 				Verbose:        isVerbose,
 				Pretty:         isPretty,
+				Debug:          isDebug,
 				TestsSecretary: testsSecretary,
 				Output:         os.Stdout,
 			}),
@@ -158,11 +173,21 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print version information",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("ene version %s\n", version)
+		fmt.Printf("commit: %s\n", commit)
+		fmt.Printf("built: %s\n", date)
+	},
+}
+
 var scaffoldTestCmd = &cobra.Command{
 	Use:   "scaffold-test [name]",
 	Args:  cobra.ExactArgs(1),
 	Short: "Scaffold a new test",
-	Long:  `Create a new test suite under ./tests/<name>`,
+	Long:  `Create a new test suite under ./tests/<n>`,
 	Run: func(cmd *cobra.Command, args []string) {
 		tmpl := cmd.Flag("tmpl").Value.String()
 
@@ -306,11 +331,13 @@ func init() {
 	rootCmd.Flags().String("html", "", "generate HTML report to this path") // new
 	rootCmd.Flags().String("json", "", "generate JSON report to this path")
 	rootCmd.Flags().String("base-dir", "", "base directory for tests, defaults to current directory")
+	rootCmd.Flags().Bool("cleanup-cache", false, "cleanup old cached Docker images to prevent bloat")
 
 	scaffoldTestCmd.Flags().
 		String("tmpl", "", "templates to use for scaffolding, e.g. 'e2e scaffold-test my_test --tmpl=mongo,httpmock'")
 
 	rootCmd.AddCommand(scaffoldTestCmd)
+	rootCmd.AddCommand(versionCmd)
 }
 
 func main() {

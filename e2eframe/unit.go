@@ -24,6 +24,41 @@ func (e *ConfigKeyNotFoundError) Error() string {
 	return fmt.Sprintf("config key not found: %s", e.Key)
 }
 
+// UserFriendlyError interface for errors that can provide simplified messages
+type UserFriendlyError interface {
+	UserFriendlyMessage() string
+}
+
+// FormatError formats an error message based on debug mode
+// In debug mode, returns the full error message
+// In non-debug mode, returns simplified message if error implements UserFriendlyError
+func FormatError(err error, debug bool) string {
+	if err == nil {
+		return ""
+	}
+
+	if debug {
+		return err.Error()
+	}
+
+	// Walk through the error chain to find UserFriendlyError
+	currentErr := err
+	for currentErr != nil {
+		if userFriendlyErr, ok := currentErr.(UserFriendlyError); ok {
+			return userFriendlyErr.UserFriendlyMessage()
+		}
+
+		// Try to unwrap the error
+		if unwrapper, ok := currentErr.(interface{ Unwrap() error }); ok {
+			currentErr = unwrapper.Unwrap()
+		} else {
+			break
+		}
+	}
+
+	return err.Error()
+}
+
 type UnitStartOptions struct {
 	Debug bool
 	// Network is the network to use for the service.
@@ -33,6 +68,8 @@ type UnitStartOptions struct {
 	Verbose bool
 	// CacheImages enables caching for the service.
 	CacheImages bool
+	// CleanupCache removes old cached images to prevent bloat
+	CleanupCache bool
 	// Fixtures is a list of fixtures to apply on interpolations.
 	Fixtures []Fixture
 	// EventSink is a channel to send events to.

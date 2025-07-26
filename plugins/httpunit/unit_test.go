@@ -1,4 +1,4 @@
-package httpplugin_test
+package httpunit_test
 
 import (
 	"context"
@@ -7,24 +7,24 @@ import (
 	"testing"
 	"time"
 
-	httpplugin "github.com/exapsy/ene/plugins/httpunit"
+	httpunit "github.com/exapsy/ene/plugins/httpunit"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewHTTPUnit_Errors(t *testing.T) {
 	// missing command
-	_, err := httpplugin.New(map[string]any{
+	_, err := httpunit.New(map[string]any{
 		"dockerfile": "Dockerfile",
-		"port":       8080,
+		"app_port":   8080,
 		"name":       "svc",
 	})
 	assert.Error(t, err)
 
 	// missing dockerfile
-	_, err = httpplugin.New(map[string]any{
-		"command": []any{"echo"},
-		"port":    8080,
-		"name":    "svc",
+	_, err = httpunit.New(map[string]any{
+		"command":  []any{"echo"},
+		"app_port": 8080,
+		"name":     "svc",
 	})
 	assert.Error(t, err)
 }
@@ -50,37 +50,37 @@ CMD ["python3","-m","http.server","8080"]
 		t.Fatalf("write Dockerfile: %v", err)
 	}
 
-	cfg := map[string]any{
+	config := map[string]any{
 		"name":            "pyhttp",
 		"command":         []any{"python3", "-m", "http.server", "8080"},
 		"dockerfile":      df,
-		"port":            8080,
+		"app_port":        8080,
 		"healthcheck":     "/",
 		"env_file":        "",
 		"startup_timeout": "30s",
 	}
 
-	u, err := httpplugin.New(cfg)
+	unit, err := httpunit.New(config)
 	assert.NoError(t, err)
-	assert.Equal(t, "pyhttp", u.Name())
+	assert.Equal(t, "pyhttp", unit.Name())
 
 	// start container and wait for the server to respond
-	assert.NoError(t, u.Start(ctx, nil))
-	assert.NoError(t, u.WaitForReady(ctx))
+	assert.NoError(t, unit.Start(ctx, nil))
+	assert.NoError(t, unit.WaitForReady(ctx))
 
 	// endpoint should include localhost
-	ep := u.LocalEndpoint()
+	ep := unit.LocalEndpoint()
 	assert.Contains(t, ep, "http://localhost:")
 
 	// Get works for host and port
-	h, err := u.Get("host")
+	h, err := unit.Get("host")
 	assert.NoError(t, err)
 	assert.Equal(t, "localhost", h)
 
-	p, err := u.Get("port")
+	p, err := unit.Get("port")
 	assert.NoError(t, err)
 	assert.Equal(t, "8080", p)
 
 	// stop the container
-	assert.NoError(t, u.Stop())
+	assert.NoError(t, unit.Stop())
 }
