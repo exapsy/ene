@@ -1,269 +1,454 @@
-# Minio Unit Plugin
+# Minio Plugin for ene E2E Testing Framework
 
-The Minio unit plugin provides support for running Minio object storage containers in the ene E2E testing framework. This plugin allows you to easily set up and test applications that depend on S3-compatible object storage.
+The Minio plugin provides comprehensive support for testing object storage scenarios using Minio containers. It follows a **state-based verification approach** rather than action-based testing, making it ideal for verifying storage state after other operations.
 
-## Features
+## Key Concepts
 
-- **Easy Setup**: Start Minio containers with minimal configuration
-- **Automatic Bucket Creation**: Pre-create buckets during startup
-- **Custom Commands**: Support for custom Minio server commands via `cmd`
-- **Environment Variables**: Full support for environment variable configuration
-- **Network Integration**: Seamless integration with ene's Docker networking
-- **Variable Access**: Access Minio connection details from other units and tests
+### State Verification vs Action Testing
 
-## Configuration
+Unlike HTTP tests that verify request/response interactions, Minio tests verify the **current state** of storage:
 
-### Basic Configuration
+- **HTTP tests**: "Send this request, expect this response"
+- **Minio tests**: "Storage should be in this state"
 
-```yaml
-kind: e2e_test:v1
-name: minio-test
-units:
-  - kind: minio
-    name: minio-server
-    app_port: 9000
-    console_port: 9001
+### Typical Workflow
 
-target: minio-server
-tests:
-  - name: "Test Minio health"
-    kind: http
-    request:
-      method: GET
-      path: /minio/health/live
-    expect:
-      status_code: 200
-```
+1. **Action phase**: Use HTTP/API tests to perform operations (upload, process, delete files)
+2. **Verification phase**: Use Minio tests to verify the storage state matches expectations
 
-### Full Configuration
+## Minio Unit Configuration
 
 ```yaml
 units:
   - kind: minio
-    name: minio-server
-    image: minio/minio:latest           # Docker image (default: minio/minio:latest)
-    access_key: myaccesskey             # Access key (default: minioadmin)
-    secret_key: mysecretkey             # Secret key (default: minioadmin)
-    app_port: 9000                      # Minio API port (default: 9000)
-    console_port: 9001                  # Minio console port (default: 9001)
-    startup_timeout: 30s                # Container startup timeout
-    buckets:                            # Buckets to create automatically
+    name: storage
+    image: minio/minio:latest          # Optional, defaults to minio/minio:latest
+    access_key: testuser               # Optional, defaults to minioadmin
+    secret_key: testpass123            # Optional, defaults to minioadmin
+    app_port: 9000                     # Optional, defaults to 9000
+    console_port: 9001                 # Optional, defaults to 9001
+    startup_timeout: 30s               # Optional, defaults to 10s
+    buckets:                           # Optional, buckets to create on startup
       - uploads
-      - documents
-      - images
-    cmd:                                # Custom command (optional)
+      - processed
+      - archived
+    env:                               # Optional, additional environment variables
+      MINIO_BROWSER: "on"
+      MINIO_DOMAIN: "localhost"
+    cmd:                               # Optional, custom command
       - server
       - /data
       - --console-address
       - ":9001"
-    env:                                # Environment variables
-      - MINIO_BROWSER=on
-      - MINIO_DOMAIN=localhost
-    env_file: .env                      # Load environment from file
 ```
 
-## Configuration Options
+### Available Variables
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `name` | string | **required** | Unit name for referencing |
-| `image` | string | `minio/minio:latest` | Docker image to use |
-| `access_key` | string | `minioadmin` | Minio access key |
-| `secret_key` | string | `minioadmin` | Minio secret key |
-| `app_port` | int | `9000` | Minio API port |
-| `console_port` | int | `9001` | Minio console port |
-| `startup_timeout` | duration | `10s` | Container startup timeout |
-| `buckets` | []string | `[]` | Buckets to create on startup |
-| `cmd` | []string | `["server", "/data", "--console-address", ":9001"]` | Custom command |
-| `env` | []string | `[]` | Environment variables |
-| `env_file` | string | `""` | Environment file path |
+The Minio unit exposes these variables for use in other units:
 
-## Variable Access
+- `{{ unit.host }}` - Container host
+- `{{ unit.port }}` - Mapped port for Minio API
+- `{{ unit.endpoint }}` - Full external endpoint (host:port)
+- `{{ unit.local_endpoint }}` - Internal network endpoint
+- `{{ unit.access_key }}` - Access key
+- `{{ unit.secret_key }}` - Secret key
+- `{{ unit.console_port }}` - Mapped console port
+- `{{ unit.console_endpoint }}` - Full console endpoint
 
-The Minio plugin exposes several variables that can be accessed from other units and tests:
+## Minio State Verification Tests
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `host` | Container hostname | `{{ minio-server.host }}` |
-| `port` | External API port | `{{ minio-server.port }}` |
-| `endpoint` | External endpoint | `{{ minio-server.endpoint }}` |
-| `local_endpoint` | Internal endpoint | `{{ minio-server.local_endpoint }}` |
-| `access_key` | Access key | `{{ minio-server.access_key }}` |
-| `secret_key` | Secret key | `{{ minio-server.secret_key }}` |
-| `console_port` | External console port | `{{ minio-server.console_port }}` |
-| `console_endpoint` | Console endpoint | `{{ minio-server.console_endpoint }}` |
+### Basic Syntax
 
-## Examples
+```yaml
+tests:
+  - name: "Verify file upload state"
+    kind: minio
+    verify_state:
+      # State verification configuration
+```
 
-### Basic File Upload Test
+### Files Exist (Simple)
+
+Verify that specific files exist in storage:
+
+```yaml
+verify_state:
+  files_exist:
+    - "uploads/user123/profile.jpg"
+    - "documents/report.pdf"
+    - "backups/daily.zip"
+```
+
+### Bucket Counts
+
+Verify the number of files in each bucket:
+
+```yaml
+verify_state:
+  bucket_counts:
+    uploads: 2      # exactly 2 files
+    processed: 1    # exactly 1 file
+    archived: 0     # empty bucket
+```
+
+### Required State
+
+Specify what MUST exist with detailed constraints:
+
+```yaml
+verify_state:
+  required:
+    buckets:
+      uploads:
+        - path: "user123/profile.jpg"
+          min_size: "1KB"           # minimum file size
+          max_size: "10MB"          # maximum file size
+          max_age: "5m"             # uploaded within last 5 minutes
+          content_type: "image/jpeg" # MIME type
+        - path: "user123/document.pdf"
+          min_size: "50KB"
+          content_type: "application/pdf"
+    
+    files:  # Direct file specifications
+      - path: "backups/daily.zip"
+        min_size: "100MB"
+        max_age: "24h"
+```
+
+#### Size Formats
+
+Supported size formats:
+- `100` or `100B` - bytes
+- `1KB` - kilobytes
+- `2MB` - megabytes  
+- `3GB` - gigabytes
+- `1TB` - terabytes
+
+#### Time Formats
+
+Supported duration formats:
+- `30s` - seconds
+- `5m` - minutes
+- `2h` - hours
+- `24h` - hours
+- `7d` - days (use `168h`)
+
+### Forbidden State
+
+Specify what MUST NOT exist:
+
+```yaml
+verify_state:
+  forbidden:
+    buckets:
+      uploads:
+        - "temp_*"        # no files matching temp_*
+        - "*.tmp"         # no .tmp files
+        - "debug_*"       # no debug files
+      cache:
+        - "*"             # bucket should be completely empty
+    
+    files:  # Direct file paths that should not exist
+      - "uploads/password.txt"
+      - "logs/sensitive.log"
+```
+
+#### Pattern Matching
+
+Forbidden patterns support glob-style wildcards:
+- `*` - matches any characters
+- `temp_*` - matches files starting with "temp_"
+- `*.tmp` - matches files ending with ".tmp"
+- `user*/profile.*` - matches nested patterns
+
+### Constraints
+
+Flexible validation rules for buckets and global storage:
+
+```yaml
+verify_state:
+  constraints:
+    # Bucket-specific constraints
+    - bucket: uploads
+      file_count: 2                    # exactly 2 files
+      max_total_size: "100MB"          # total size limit
+      min_total_size: "1MB"            # minimum total size
+    
+    - bucket: processed
+      file_count: ">= 1"               # at least 1 file
+      max_total_size: "200MB"
+    
+    # Global constraints
+    - total_buckets: "<= 5"            # at most 5 buckets
+    - empty_buckets: "allowed"         # empty buckets are OK
+```
+
+#### Constraint Operators
+
+File count and bucket count constraints support:
+- `5` - exactly 5
+- `>= 5` or `≥ 5` - 5 or more
+- `<= 5` or `≤ 5` - 5 or fewer
+- `> 5` - more than 5
+- `< 5` - fewer than 5
+
+## Complete Example
 
 ```yaml
 kind: e2e_test:v1
-name: file-upload-test
+name: file-storage-workflow
+
 units:
   - kind: minio
     name: storage
-    buckets:
-      - uploads
-
+    buckets: [uploads, processed, archived]
+  
   - kind: http
-    name: app
-    image: node:18-alpine
-    app_port: 3000
+    name: file-api
     env:
-      - MINIO_ENDPOINT={{ storage.local_endpoint }}
-      - MINIO_ACCESS_KEY={{ storage.access_key }}
-      - MINIO_SECRET_KEY={{ storage.secret_key }}
-    cmd:
-      - /bin/sh
-      - -c
-      - |
-        npm init -y
-        npm install express minio
-        cat > server.js << 'EOF'
-        const express = require('express');
-        const Minio = require('minio');
-        const app = express();
-        
-        const minioClient = new Minio.Client({
-          endPoint: process.env.MINIO_ENDPOINT.split(':')[0],
-          port: parseInt(process.env.MINIO_ENDPOINT.split(':')[1]),
-          useSSL: false,
-          accessKey: process.env.MINIO_ACCESS_KEY,
-          secretKey: process.env.MINIO_SECRET_KEY
-        });
-        
-        app.post('/upload/:filename', (req, res) => {
-          minioClient.putObject('uploads', req.params.filename, 'test content')
-            .then(() => res.json({success: true}))
-            .catch(err => res.status(500).json({error: err.message}));
-        });
-        
-        app.listen(3000, () => console.log('Server ready'));
-        EOF
-        node server.js
+      STORAGE_ENDPOINT: "{{ storage.local_endpoint }}"
+      STORAGE_ACCESS_KEY: "{{ storage.access_key }}"
+      STORAGE_SECRET_KEY: "{{ storage.secret_key }}"
 
-target: app
+target: file-api
+
 tests:
-  - name: "Upload file"
+  # Action: Upload files via API
+  - name: "Upload user files"
     kind: http
     request:
       method: POST
-      path: /upload/test.txt
+      path: /upload
+      files:
+        profile: "profile.jpg"
+        document: "resume.pdf"
     expect:
       status_code: 200
+
+  # Verification: Check storage state
+  - name: "Verify files were stored correctly"
+    kind: minio
+    verify_state:
+      # Simple existence check
+      files_exist:
+        - "uploads/user123/profile.jpg"
+        - "uploads/user123/resume.pdf"
+      
+      # Detailed requirements
+      required:
+        buckets:
+          uploads:
+            - path: "user123/profile.jpg"
+              min_size: "1KB"
+              max_size: "10MB"
+              content_type: "image/jpeg"
+              max_age: "2m"
+            - path: "user123/resume.pdf"
+              content_type: "application/pdf"
+      
+      # No temp files allowed
+      forbidden:
+        buckets:
+          uploads:
+            - "temp_*"
+            - "*.tmp"
+      
+      # Count and size constraints
+      constraints:
+        - bucket: uploads
+          file_count: 2
+          max_total_size: "50MB"
+        - bucket: processed
+          file_count: 0  # should be empty
 ```
 
-### Custom Minio Configuration
+## Integration with Other Units
+
+### With HTTP Services
 
 ```yaml
-units:
-  - kind: minio
-    name: minio-custom
-    access_key: admin
-    secret_key: password123
+- kind: http
+  name: api
+  env:
+    MINIO_ENDPOINT: "{{ storage.local_endpoint }}"
+    MINIO_ACCESS_KEY: "{{ storage.access_key }}"
+    MINIO_SECRET_KEY: "{{ storage.secret_key }}"
+```
+
+### With Database Services
+
+```yaml
+tests:
+  # Update database
+  - name: "Record file upload"
+    kind: http
+    request:
+      method: POST
+      path: /files
+      body: '{"name": "profile.jpg", "bucket": "uploads"}'
+  
+  # Verify database state
+  - name: "Check database record"
+    kind: postgres
+    query: "SELECT COUNT(*) FROM files WHERE name = 'profile.jpg'"
+    expect:
+      rows: [["1"]]
+  
+  # Verify storage state
+  - name: "Check file actually exists in storage"
+    kind: minio
+    verify_state:
+      files_exist:
+        - "uploads/profile.jpg"
+```
+
+## Best Practices
+
+### 1. Test Storage State, Not Actions
+
+❌ **Don't** test Minio operations directly:
+```yaml
+# Avoid this approach
+- name: "Upload file to Minio"
+  kind: minio
+  action: put_object  # This was the old approach
+```
+
+✅ **Do** verify storage state after operations:
+```yaml
+# Use this approach
+- name: "Upload via API"
+  kind: http
+  # ... perform upload
+
+- name: "Verify file was stored"
+  kind: minio
+  verify_state:
+    files_exist: ["uploads/file.txt"]
+```
+
+### 2. Use Meaningful Test Names
+
+```yaml
+# Good: describes what state is being verified
+- name: "Verify user profile upload completed successfully"
+- name: "Confirm temporary files were cleaned up"
+- name: "Check processed files moved to archive"
+```
+
+### 3. Combine Simple and Detailed Checks
+
+```yaml
+verify_state:
+  # Start with simple checks
+  files_exist:
+    - "uploads/profile.jpg"
+  
+  # Add detailed constraints as needed
+  required:
     buckets:
-      - data
-      - backups
-    cmd:
-      - server
-      - /data
-      - --console-address
-      - ":9001"
-      - --address
-      - ":9000"
-    env:
-      - MINIO_BROWSER=on
-      - MINIO_PROMETHEUS_AUTH_TYPE=public
+      uploads:
+        - path: "profile.jpg"
+          min_size: "1KB"
+          content_type: "image/jpeg"
 ```
 
-### Multi-Bucket Setup
+### 4. Use Constraints for Business Rules
 
 ```yaml
-units:
-  - kind: minio
-    name: storage
+constraints:
+  - bucket: uploads
+    max_total_size: "1GB"      # Business rule: max 1GB per user
+  - bucket: temp
+    file_count: 0              # Business rule: temp should be cleaned
+  - total_buckets: "<= 10"     # Infrastructure limit
+```
+
+### 5. Test Error Conditions
+
+```yaml
+# Verify cleanup worked
+verify_state:
+  forbidden:
     buckets:
-      - user-uploads
-      - system-data
-      - temp-files
-      - backups
-    env:
-      - MINIO_BROWSER=on
-      - MINIO_DOMAIN=localhost
+      uploads:
+        - "*.tmp"          # No temp files
+        - "failed_*"       # No failed uploads
+        - "corrupt_*"      # No corrupt files
 ```
 
-## Environment Variables
+## Migration from Old Approach
 
-The Minio plugin automatically sets the following environment variables:
+If you're migrating from the action-based approach:
 
-- `MINIO_ROOT_USER`: Access key for authentication
-- `MINIO_ROOT_PASSWORD`: Secret key for authentication
-- `MINIO_ENDPOINT`: Internal endpoint for container communication
-
-Additional environment variables can be set via the `env` array or `env_file` option.
-
-## Bucket Management
-
-Buckets specified in the `buckets` array are automatically created during container startup. This ensures your tests can immediately use the storage without additional setup steps.
-
-## Integration with Applications
-
-Use the exposed variables to configure your application containers:
-
+### Old Approach (Deprecated)
 ```yaml
-units:
-  - kind: minio
-    name: storage
-    
-  - kind: http
-    name: api
-    env:
-      - S3_ENDPOINT={{ storage.local_endpoint }}
-      - S3_ACCESS_KEY={{ storage.access_key }}
-      - S3_SECRET_KEY={{ storage.secret_key }}
-      - S3_BUCKET=uploads
+- name: "Test file upload"
+  kind: minio
+  request:
+    action: put_object
+    bucket: uploads
+    object: test.txt
+    content: "test"
+  expect:
+    # complex assertion structure
 ```
 
-## Testing Best Practices
+### New Approach
+```yaml
+# Step 1: Perform action via your API
+- name: "Upload file via API"
+  kind: http
+  request:
+    method: POST
+    path: /upload
+    body: '{"filename": "test.txt", "content": "test"}'
 
-1. **Use meaningful bucket names**: Choose bucket names that reflect their purpose
-2. **Test both success and error cases**: Verify error handling for missing files, permissions, etc.
-3. **Clean up resources**: Rely on ene's automatic container cleanup
-4. **Use local endpoints**: For container-to-container communication, use `local_endpoint`
-5. **Test file operations**: Upload, download, list, and delete operations
+# Step 2: Verify storage state
+- name: "Verify file was stored"
+  kind: minio
+  verify_state:
+    files_exist:
+      - "uploads/test.txt"
+    required:
+      buckets:
+        uploads:
+          - path: "test.txt"
+            min_size: "1B"
+```
 
 ## Troubleshooting
 
-### Container Won't Start
+### Common Issues
 
-- Check the `startup_timeout` if containers take longer to initialize
-- Verify the Docker image is available
-- Check for port conflicts
+1. **Files not found**: Check bucket names and file paths
+2. **Size mismatches**: Verify size format (KB, MB, GB)
+3. **Time constraints**: Ensure max_age is reasonable for test execution time
+4. **Pattern matching**: Test forbidden patterns carefully
 
-### Connection Issues
+### Debug Tips
 
-- Ensure you're using the correct endpoint (`local_endpoint` for internal, `endpoint` for external)
-- Verify access credentials are correctly configured
-- Check network connectivity between containers
+```yaml
+# Use simple checks first
+verify_state:
+  files_exist:
+    - "uploads/test.txt"
 
-### Bucket Creation Fails
-
-- Verify bucket names are valid (lowercase, no special characters)
-- Check Minio logs for detailed error messages
-- Ensure sufficient startup time for bucket creation
-
-## Development
-
-The Minio plugin is located in `ene/plugins/miniounit/` and includes:
-
-- `unit.go`: Main plugin implementation
-- `unit_test.go`: Comprehensive test suite
-- Integration with the ene framework's unit interface
-
-To contribute or modify the plugin, ensure all tests pass:
-
-```bash
-cd ene
-go test ./plugins/miniounit/... -v
+# Then add constraints incrementally
+verify_state:
+  files_exist:
+    - "uploads/test.txt"
+  required:
+    buckets:
+      uploads:
+        - path: "test.txt"
+          min_size: "1B"  # Start with minimal constraints
 ```
+
+### Error Messages
+
+The plugin provides detailed error messages:
+- File existence: `"file uploads/test.txt does not exist"`
+- Size constraints: `"file size 500 is less than minimum 1024"`
+- Count mismatches: `"bucket uploads has 3 files, expected 2"`
+- Pattern violations: `"forbidden file pattern *.tmp found: temp_file.tmp"`

@@ -1,0 +1,221 @@
+# Simple Minio State Verification Example
+# This demonstrates the new state-based approach for testing Minio storage
+
+kind: e2e_test:v1
+name: minio-simple-state-test
+
+units:
+  # Minio storage unit
+  - kind: minio
+    name: storage
+    image: minio/minio:latest
+    access_key: testuser
+    secret_key: testpass123
+    app_port: 9000
+    buckets:
+      - uploads
+      - processed
+
+  # Simple HTTP service that interacts with Minio
+  - kind: http
+    name: file-api
+    image: node:18-alpine
+    app_port: 3000
+    env:
+      - MINIO_ENDPOINT={{ storage.local_endpoint }}
+      - MINIO_ACCESS_KEY={{ storage.access_key }}
+      - MINIO_SECRET_KEY={{ storage.secret_key }}
+    cmd:
+      - /bin/sh
+      - -c
+      - |
+        npm init -y
+        npm install express minio
+        cat > server.js << 'EOF'
+        const express = require('express');
+        const Minio = require('minio');
+        
+        const app = express();
+        app.use(express.json());
+        
+        const minioClient = new Minio.Client({
+          endPoint: process.env.MINIO_ENDPOINT.split(':')[0],
+          port: parseInt(process.env.MINIO_ENDPOINT.split(':')[1]),
+          useSSL: false,
+          accessKey: process.env.MINIO_ACCESS_KEY,
+          secretKey: process.env.MINIO_SECRET_KEY
+        });
+        
+        app.get('/health', (req, res) => {
+          res.json({ status: 'ok' });
+        });
+        
+        app.post('/upload', async (req, res) => {
+          try {
+            const { filename, content } = req.body;
+            await minioClient.putObject('uploads', filename, content);
+            res.json({ success: true, filename });
+          } catch (error) {
+            res.status(500).json({ error: error.message });
+          }
+        });
+        
+        app.post('/process/:filename', async (req, res) => {
+          try {
+            const filename = req.params.filename;
+            await minioClient.copyObject('processed', filename, `/uploads/${filename}`);
+            res.json({ success: true, processed: filename });
+          } catch (error) {
+            res.status(500).json({ error: error.message });
+          }
+        });
+        
+        const port = process.env.PORT || 3000;
+        app.listen(port, '0.0.0.0', () => {
+          console.log(`Server running on port ${port}`);
+        });
+        EOF
+        node server.js
+
+target: file-api
+
+tests:
+  # Test 1: Initial state - empty storage
+  - name: "Verify initial empty state"
+    kind: minio
+    verify_state:
+      bucket_counts:
+        uploads: 0
+        processed: 0
+
+  # Test 2: Upload a file via HTTP API
+  - name: "Upload file via API"
+    kind: http
+    request:
+      method: POST
+      path: /upload
+      headers:
+        Content-Type: "application/json"
+      body: '{"filename": "test.txt", "content": "Hello, World!"}'
+    expect:
+      status_code: 200
+      json:
+        success: true
+        filename: "test.txt"
+
+  # Test 3: Verify file was stored (simple check)
+  - name: "Verify file was uploaded to storage"
+    kind: minio
+    verify_state:
+      files_exist:
+        - "uploads/test.txt"
+      bucket_counts:
+        uploads: 1
+        processed: 0
+
+  # Test 4: Upload another file
+  - name: "Upload second file"
+    kind: http
+    request:
+      method: POST
+      path: /upload
+      headers:
+        Content-Type: "application/json"
+      body: '{"filename": "document.pdf", "content": "PDF content here"}'
+    expect:
+      status_code: 200
+
+  # Test 5: Verify both files exist with constraints
+  - name: "Verify both files in storage with constraints"
+    kind: minio
+    verify_state:
+      files_exist:
+        - "uploads/test.txt"
+        - "uploads/document.pdf"
+      
+      required:
+        buckets:
+          uploads:
+            - path: "test.txt"
+              min_size: "10B"
+              max_age: "2m"
+            - path: "document.pdf"
+              min_size: "5B"
+              max_age: "2m"
+      
+      constraints:
+        - bucket: uploads
+          file_count: 2
+          max_total_size: "1MB"
+
+  # Test 6: Process one file
+  - name: "Process test.txt file"
+    kind: http
+    request:
+      method: POST
+      path: /process/test.txt
+    expect:
+      status_code: 200
+      json:
+        success: true
+        processed: "test.txt"
+
+  # Test 7: Verify processing state
+  - name: "Verify file processing completed"
+    kind: minio
+    verify_state:
+      # Both buckets should have files now
+      files_exist:
+        - "uploads/test.txt"      # original still there
+        - "uploads/document.pdf"  # other file still there
+        - "processed/test.txt"    # copy created
+
+      # Check bucket counts
+      bucket_counts:
+        uploads: 2      # both original files
+        processed: 1    # one processed file
+
+      # Verify processed file properties
+      required:
+        buckets:
+          processed:
+            - path: "test.txt"
+              min_size: "10B"
+              max_age: "1m"
+
+  # Test 8: Complete state verification
+  - name: "Final comprehensive state check"
+    kind: minio
+    verify_state:
+      # What must exist
+      required:
+        buckets:
+          uploads:
+            - path: "test.txt"
+              min_size: "10B"
+            - path: "document.pdf"
+              min_size: "5B"
+          processed:
+            - path: "test.txt"
+              min_size: "10B"
+
+      # What must not exist (no temp files)
+      forbidden:
+        buckets:
+          uploads:
+            - "temp_*"
+            - "*.tmp"
+          processed:
+            - "temp_*"
+
+      # Final constraints
+      constraints:
+        - bucket: uploads
+          file_count: 2
+          max_total_size: "10MB"
+        
+        - bucket: processed
+          file_count: 1
+          max_total_size: "10MB"
+        
+        - total_buckets: "≤ 2"

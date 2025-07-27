@@ -189,6 +189,9 @@
             "oneOf": [
               {
                 "const": "http"
+              },
+              {
+                "const": "minio"
               }
             ]
           },
@@ -230,17 +233,270 @@
                 "additionalProperties": {
                   "type": "string"
                 }
+              },
+              "bucket": {
+                "type": "string",
+                "description": "Minio bucket name"
+              },
+              "object": {
+                "type": "string",
+                "description": "Minio object key"
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "list_buckets",
+                  "list_objects",
+                  "get_object",
+                  "stat_object",
+                  "bucket_exists",
+                  "object_exists",
+                  "put_object"
+                ],
+                "description": "Minio action to perform"
+              },
+              "content": {
+                "type": "string",
+                "description": "Content for put_object action"
+              },
+              "prefix": {
+                "type": "string",
+                "description": "Prefix for list_objects action"
               }
-            },
-            "required": [
-              "path"
-            ]
+            }
+          },
+          "verify_state": {
+            "type": "object",
+            "properties": {
+              "required": {
+                "type": "object",
+                "properties": {
+                  "buckets": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "min_size": {
+                            "type": "string"
+                          },
+                          "max_size": {
+                            "type": "string"
+                          },
+                          "max_age": {
+                            "type": "string"
+                          },
+                          "content_type": {
+                            "type": "string"
+                          },
+                          "pattern": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["path"]
+                      }
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "min_size": {
+                          "type": "string"
+                        },
+                        "max_size": {
+                          "type": "string"
+                        },
+                        "max_age": {
+                          "type": "string"
+                        },
+                        "content_type": {
+                          "type": "string"
+                        },
+                        "pattern": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["path"]
+                    }
+                  }
+                }
+              },
+              "forbidden": {
+                "type": "object",
+                "properties": {
+                  "buckets": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "constraints": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "bucket": {
+                      "type": "string"
+                    },
+                    "file_count": {
+                      "oneOf": [
+                        {"type": "integer"},
+                        {"type": "string"}
+                      ]
+                    },
+                    "max_total_size": {
+                      "type": "string"
+                    },
+                    "min_total_size": {
+                      "type": "string"
+                    },
+                    "total_buckets": {
+                      "type": "string"
+                    },
+                    "empty_buckets": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "files_exist": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bucket_counts": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "expect": {
             "type": "object",
             "properties": {
               "status_code": {
                 "type": "integer"
+              },
+              "bucket_asserts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "present": {
+                      "type": "boolean"
+                    },
+                    "created_date": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name"]
+                }
+              },
+              "object_asserts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "present": {
+                      "type": "boolean"
+                    },
+                    "size": {
+                      "type": "integer"
+                    },
+                    "content_type": {
+                      "type": "string"
+                    },
+                    "etag": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["key"]
+                }
+              },
+              "content_assert": {
+                "type": "object",
+                "properties": {
+                  "equals": {
+                    "type": "string"
+                  },
+                  "contains": {
+                    "type": "string"
+                  },
+                  "not_contains": {
+                    "type": "string"
+                  },
+                  "matches": {
+                    "type": "string"
+                  },
+                  "not_matches": {
+                    "type": "string"
+                  },
+                  "min_length": {
+                    "type": "integer"
+                  },
+                  "max_length": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "count_assert": {
+                "type": "object",
+                "properties": {
+                  "equals": {
+                    "type": "integer"
+                  },
+                  "greater_than": {
+                    "type": "integer"
+                  },
+                  "less_than": {
+                    "type": "integer"
+                  },
+                  "at_least": {
+                    "type": "integer"
+                  },
+                  "at_most": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "exists_assert": {
+                "type": "object",
+                "properties": {
+                  "bucket": {
+                    "type": "boolean"
+                  },
+                  "object": {
+                    "type": "boolean"
+                  }
+                }
               },
               "body_asserts": {
                 "type": "array",
@@ -346,15 +602,32 @@
                   ]
                 }
               }
-            },
-            "required": ["status_code"]
+            }
           }
         },
-        "required": [
-          "name",
-          "kind",
-          "request",
-          "expect"
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "minio"
+                }
+              }
+            },
+            "then": {
+              "anyOf": [
+                {
+                  "required": ["name", "kind", "verify_state"]
+                },
+                {
+                  "required": ["name", "kind", "request", "expect"]
+                }
+              ]
+            },
+            "else": {
+              "required": ["name", "kind", "request", "expect"]
+            }
+          }
         ]
       }
     }

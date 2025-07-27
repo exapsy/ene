@@ -1,13 +1,13 @@
-# Example E2E test configuration with Minio
-# This demonstrates how to use the Minio plugin in ene framework
+# Enhanced Minio E2E Testing Example
+# This demonstrates the new state-based approach for Minio testing in ene framework
 
 kind: e2e_test:v1
-name: minio-example-test
+name: minio-state-verification-example
 
 units:
-  # Minio service with default configuration
+  # Minio service with test buckets
   - kind: minio
-    name: minio-server
+    name: storage
     image: minio/minio:latest
     access_key: testuser
     secret_key: testpass123
@@ -16,31 +16,32 @@ units:
     startup_timeout: 30s
     buckets:
       - uploads
-      - documents
-      - images
+      - processed
+      - archived
     env:
       - MINIO_BROWSER=on
       - MINIO_DOMAIN=localhost
 
-  # Example HTTP service that uses Minio
+  # Example file service that interacts with Minio
   - kind: http
     name: file-service
     image: node:18-alpine
     app_port: 3000
     env:
-      - MINIO_ENDPOINT={{ minio-server.local_endpoint }}
-      - MINIO_ACCESS_KEY={{ minio-server.access_key }}
-      - MINIO_SECRET_KEY={{ minio-server.secret_key }}
+      - MINIO_ENDPOINT={{ storage.local_endpoint }}
+      - MINIO_ACCESS_KEY={{ storage.access_key }}
+      - MINIO_SECRET_KEY={{ storage.secret_key }}
       - MINIO_BUCKET=uploads
     cmd:
       - /bin/sh
       - -c
       - |
         npm init -y
-        npm install express minio
+        npm install express minio multer
         cat > server.js << 'EOF'
         const express = require('express');
         const Minio = require('minio');
+        const multer = require('multer');
         
         const app = express();
         app.use(express.json());
@@ -53,42 +54,64 @@ units:
           secretKey: process.env.MINIO_SECRET_KEY
         });
         
+        const upload = multer({ storage: multer.memoryStorage() });
+        
         app.get('/health', (req, res) => {
-          res.json({ status: 'ok', minio: process.env.MINIO_ENDPOINT });
+          res.json({ status: 'ok', storage: process.env.MINIO_ENDPOINT });
         });
         
-        app.get('/buckets', async (req, res) => {
+        app.post('/upload', upload.single('file'), async (req, res) => {
           try {
-            const buckets = await minioClient.listBuckets();
-            res.json(buckets);
-          } catch (error) {
-            res.status(500).json({ error: error.message });
-          }
-        });
-        
-        app.post('/upload', async (req, res) => {
-          try {
-            const { filename, content } = req.body;
+            const { originalname, buffer, mimetype } = req.file;
+            const objectName = `user123/${originalname}`;
+            
             await minioClient.putObject(
               process.env.MINIO_BUCKET,
-              filename,
-              Buffer.from(content, 'utf8')
+              objectName,
+              buffer,
+              buffer.length,
+              { 'Content-Type': mimetype }
             );
-            res.json({ success: true, filename });
+            res.json({ success: true, path: objectName });
           } catch (error) {
             res.status(500).json({ error: error.message });
           }
         });
         
-        app.get('/files/:filename', async (req, res) => {
+        app.post('/process/:filename', async (req, res) => {
           try {
-            const stream = await minioClient.getObject(
-              process.env.MINIO_BUCKET,
-              req.params.filename
+            const filename = req.params.filename;
+            const sourcePath = `user123/${filename}`;
+            const destPath = `processed/${filename}`;
+            
+            // Copy from uploads to processed
+            await minioClient.copyObject(
+              'processed',
+              destPath,
+              `/${process.env.MINIO_BUCKET}/${sourcePath}`
             );
-            let content = '';
-            stream.on('data', chunk => content += chunk);
-            stream.on('end', () => res.json({ filename: req.params.filename, content }));
+            
+            res.json({ success: true, processed: destPath });
+          } catch (error) {
+            res.status(500).json({ error: error.message });
+          }
+        });
+        
+        app.delete('/cleanup', async (req, res) => {
+          try {
+            // Remove all temp files
+            const objects = [];
+            const stream = minioClient.listObjects('uploads', 'temp_', true);
+            
+            for await (const obj of stream) {
+              objects.push(obj.name);
+            }
+            
+            if (objects.length > 0) {
+              await minioClient.removeObjects('uploads', objects);
+            }
+            
+            res.json({ success: true, removed: objects.length });
           } catch (error) {
             res.status(500).json({ error: error.message });
           }
@@ -96,7 +119,7 @@ units:
         
         const port = process.env.PORT || 3000;
         app.listen(port, '0.0.0.0', () => {
-          console.log(\`Server running on port \${port}\`);
+          console.log(`File service running on port ${port}`);
         });
         EOF
         node server.js
@@ -104,37 +127,259 @@ units:
 target: file-service
 
 tests:
-  - name: "Test Minio connectivity"
+  # Traditional HTTP tests for actions
+  - name: "Service health check"
     kind: http
     request:
       method: GET
       path: /health
     expect:
       status_code: 200
+      json:
+        status: "ok"
 
-  - name: "List available buckets"
-    kind: http
-    request:
-      method: GET
-      path: /buckets
-    expect:
-      status_code: 200
-
-  - name: "Upload a file to Minio"
+  - name: "Upload user profile image"
     kind: http
     request:
       method: POST
       path: /upload
       headers:
-        Content-Type: "application/json"
-      body: '{"filename": "test.txt", "content": "Hello, Minio!"}'
+        Content-Type: "multipart/form-data"
+      files:
+        file: |
+          filename: profile.jpg
+          content: "fake-jpeg-content"
+          content_type: image/jpeg
+    expect:
+      status_code: 200
+      json:
+        success: true
+        path: "user123/profile.jpg"
+
+  - name: "Upload user document"
+    kind: http
+    request:
+      method: POST
+      path: /upload
+      headers:
+        Content-Type: "multipart/form-data"
+      files:
+        file: |
+          filename: resume.pdf
+          content: "fake-pdf-content-with-much-longer-text"
+          content_type: application/pdf
     expect:
       status_code: 200
 
-  - name: "Download the uploaded file"
+  # State verification tests - NEW APPROACH!
+  - name: "Verify files were uploaded to storage"
+    kind: minio
+    verify_state:
+      # Simple file existence check
+      files_exist:
+        - "uploads/user123/profile.jpg"
+        - "uploads/user123/resume.pdf"
+      
+      # Verify bucket has expected file count
+      bucket_counts:
+        uploads: 2
+        processed: 0
+        archived: 0
+
+  - name: "Verify uploaded file properties"
+    kind: minio
+    verify_state:
+      required:
+        buckets:
+          uploads:
+            - path: "user123/profile.jpg"
+              min_size: "10B"
+              max_size: "10MB"
+              content_type: "image/jpeg"
+              max_age: "5m"  # uploaded within last 5 minutes
+            - path: "user123/resume.pdf"
+              min_size: "20B"
+              content_type: "application/pdf"
+              max_age: "5m"
+
+  # Process a file
+  - name: "Process uploaded file"
     kind: http
     request:
-      method: GET
-      path: /files/test.txt
+      method: POST
+      path: /process/profile.jpg
     expect:
       status_code: 200
+      json:
+        success: true
+
+  - name: "Verify file processing state"
+    kind: minio
+    verify_state:
+      # Files should exist in both locations after processing
+      files_exist:
+        - "uploads/user123/profile.jpg"  # original still there
+        - "processed/profile.jpg"        # copy created
+
+      # Updated bucket counts
+      bucket_counts:
+        uploads: 2      # original files remain
+        processed: 1    # one processed file
+        archived: 0
+
+      # Verify processed file properties
+      required:
+        buckets:
+          processed:
+            - path: "profile.jpg"
+              min_size: "10B"
+              content_type: "image/jpeg"
+              max_age: "1m"  # just processed
+
+  # Upload some temp files to test cleanup
+  - name: "Upload temp file 1"
+    kind: http
+    request:
+      method: POST
+      path: /upload
+      headers:
+        Content-Type: "multipart/form-data"
+      files:
+        file: |
+          filename: temp_cache.dat
+          content: "temporary data"
+          content_type: application/octet-stream
+    expect:
+      status_code: 200
+
+  - name: "Upload temp file 2"
+    kind: http
+    request:
+      method: POST
+      path: /upload
+      headers:
+        Content-Type: "multipart/form-data"
+      files:
+        file: |
+          filename: temp_debug.log
+          content: "debug information"
+          content_type: text/plain
+    expect:
+      status_code: 200
+
+  - name: "Verify temp files exist before cleanup"
+    kind: minio
+    verify_state:
+      files_exist:
+        - "uploads/user123/temp_cache.dat"
+        - "uploads/user123/temp_debug.log"
+      
+      bucket_counts:
+        uploads: 4  # 2 original + 2 temp files
+
+  # Clean up temp files
+  - name: "Clean up temporary files"
+    kind: http
+    request:
+      method: DELETE
+      path: /cleanup
+    expect:
+      status_code: 200
+      json:
+        success: true
+
+  - name: "Verify cleanup was successful"
+    kind: minio
+    verify_state:
+      # Original files should still exist
+      files_exist:
+        - "uploads/user123/profile.jpg"
+        - "uploads/user123/resume.pdf"
+        - "processed/profile.jpg"
+
+      # Temp files should be gone (forbidden state)
+      forbidden:
+        buckets:
+          uploads:
+            - "user123/temp_*"  # no temp files allowed
+
+      # Final bucket counts
+      bucket_counts:
+        uploads: 2      # back to original count
+        processed: 1
+        archived: 0
+
+      # Constraints validation
+      constraints:
+        - bucket: uploads
+          file_count: 2
+          max_total_size: "50MB"
+          min_total_size: "1B"
+        
+        - bucket: processed
+          file_count: ">= 1"
+          max_total_size: "100MB"
+        
+        - total_buckets: "<= 5"
+        
+        - empty_buckets: "allowed"  # archived bucket can be empty
+
+  # Advanced state verification example
+  - name: "Comprehensive storage state validation"
+    kind: minio
+    verify_state:
+      # What MUST exist
+      required:
+        buckets:
+          uploads:
+            - path: "user123/profile.jpg"
+              min_size: "10B"
+              max_size: "10MB"
+              content_type: "image/jpeg"
+            - path: "user123/resume.pdf"
+              content_type: "application/pdf"
+          processed:
+            - path: "profile.jpg"
+              min_size: "10B"
+
+      # What MUST NOT exist
+      forbidden:
+        buckets:
+          uploads:
+            - "user123/temp_*"    # no temp files
+            - "user123/*.tmp"     # no .tmp files
+            - "user123/debug_*"   # no debug files
+        files:
+          - "uploads/user123/password.txt"  # sensitive files forbidden
+          - "archived/temp.dat"             # no temp in archive
+
+      # Flexible constraints
+      constraints:
+        - bucket: uploads
+          file_count: 2
+          max_total_size: "100MB"
+        
+        - bucket: processed
+          file_count: ">= 1"
+          max_total_size: "200MB"
+        
+        - bucket: archived
+          file_count: 0  # should be empty
+        
+        - total_buckets: "≤ 3"  # should not exceed 3 buckets
+        
+        - empty_buckets: "≤ 1"  # at most 1 empty bucket allowed
+
+  # Simple validation example
+  - name: "Simple file existence check"
+    kind: minio
+    verify_state:
+      files_exist:
+        - "uploads/user123/profile.jpg"
+        - "uploads/user123/resume.pdf"
+        - "processed/profile.jpg"
+      
+      bucket_counts:
+        uploads: 2
+        processed: 1
+        archived: 0
