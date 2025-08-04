@@ -39,9 +39,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:     "e2e",
+	Use:     "ene",
 	Short:   "Run e2e tests or scaffold a new suite",
-	Long:    `When called with no sub-command, runs all e2e tests. Use "e2e scaffold-test" to create a new suite.`,
+	Long:    `When called with no sub-command, runs all e2e tests. Use "ene scaffold-test" to create a new suite.`,
 	Version: version,
 	Run: func(cmd *cobra.Command, args []string) {
 		verbose := cmd.Flag("verbose").Value.String()
@@ -246,6 +246,31 @@ var dryRunCmd = &cobra.Command{
 	},
 }
 
+var listSuitesCmd = &cobra.Command{
+	Use:   "list-suites",
+	Short: "List all available test suites",
+	Long:  `List all test suites found in the tests directory`,
+	Run: func(cmd *cobra.Command, args []string) {
+		baseDir := cmd.Flag("base-dir").Value.String()
+
+		suiteNames, err := e2eframe.ListTestSuiteNames(baseDir)
+		if err != nil {
+			fmt.Printf("%s%s✖ ERROR: %v%s\n", colorBold, colorRed, err, colorReset)
+			os.Exit(1)
+		}
+
+		if len(suiteNames) == 0 {
+			fmt.Printf("%s%sNo test suites found%s\n", colorBold, colorYellow, colorReset)
+			return
+		}
+
+		fmt.Printf("%s%sAvailable test suites:%s\n", colorBold, colorGreen, colorReset)
+		for _, name := range suiteNames {
+			fmt.Printf("  %s\n", name)
+		}
+	},
+}
+
 // ScaffoldTest creates a new test suite in ./tests/<name>.
 func ScaffoldTest(testName string, templates []string) error {
 	if testName == "" {
@@ -257,26 +282,23 @@ func ScaffoldTest(testName string, templates []string) error {
 		return fmt.Errorf("could not create directory %s: %w", suiteDir, err)
 	}
 
-	mongoUnitTmpl := `
-  - name: mongodb
+	mongoUnitTmpl := `  - name: mongodb
     kind: mongo
     image: mongo:6.0
-	migrations: db.js
-	app_port: 27017
-	startup_timeout: 15s`
-	httpUnitTmpl := `
-  - name: app
-	kind: http
-	dockerfile: Dockerfile
-	app_port: 8080
-	healthcheck: /v1/health
-	startup_timeout: 4m
-	env_file: .env
-	env:
-	  - DB_DSN={{ mongodb.dsn }}`
-	httpMockUnitTmpl := `
-  - name: app
-	kind: httpmock
+    migrations: db.js
+    app_port: 27017
+    startup_timeout: 15s`
+	httpUnitTmpl := `  - name: app
+    kind: http
+    dockerfile: Dockerfile
+    app_port: 8080
+    healthcheck: /v1/health
+    startup_timeout: 4m
+    env_file: .env
+    env:
+      - DB_DSN={{ mongodb.dsn }}`
+	httpMockUnitTmpl := `  - name: app
+    kind: httpmock
     app_port: 8080
     routes:
       - path: /healthcheck
@@ -288,24 +310,26 @@ func ScaffoldTest(testName string, templates []string) error {
           headers:
             Content-Type: "{{ content_type_inline }}"`
 
-	var unitsTmpl string
+	var units []string
 
 	if len(templates) == 0 {
-		unitsTmpl = mongoUnitTmpl + httpUnitTmpl + httpMockUnitTmpl
+		units = append(units, mongoUnitTmpl, httpUnitTmpl, httpMockUnitTmpl)
 	} else {
 		for _, tmpl := range templates {
 			switch tmpl {
 			case "mongo":
-				unitsTmpl += mongoUnitTmpl
+				units = append(units, mongoUnitTmpl)
 			case "http":
-				unitsTmpl += httpUnitTmpl
+				units = append(units, httpUnitTmpl)
 			case "httpmock":
-				unitsTmpl += httpMockUnitTmpl
+				units = append(units, httpMockUnitTmpl)
 			default:
 				return fmt.Errorf("unknown template: %s", tmpl)
 			}
 		}
 	}
+
+	unitsTmpl := strings.Join(units, "\n")
 
 	// scaffold test.yaml
 	configPath := filepath.Join(suiteDir, e2eframe.SuiteYamlFile)
@@ -314,7 +338,7 @@ name: %s
 
 fixtures:
   - name: content_type_inline
-	value: application/json; charset=utf-8
+    value: application/json; charset=utf-8
 
 units:
 %s
@@ -337,10 +361,10 @@ tests:
       header_asserts:
         - name: Content-Type
           present: true
-		  equal: "{{ content_type_inline }}"
-`, testName, strings.TrimSpace(unitsTmpl))
+          equal: "{{ content_type_inline }}"
+`, testName, unitsTmpl)
 
-	content := fmt.Sprintf(tmpl, testName, testName)
+	content := tmpl
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("could not write file %s: %w", configPath, err)
 	}
@@ -362,7 +386,7 @@ func init() {
 	rootCmd.Flags().Bool("debug", false, "enable debug mode")
 	rootCmd.Flags().Bool("parallel", false, "run tests in parallel")
 	rootCmd.Flags().
-		String("suite", "", "run specific test suites, e.g. 'e2e --suite=healthcheck,TestService_,_Function'")
+		String("suite", "", "run specific test suites (comma-separated), e.g. 'ene --suite=suite1,suite2' or partial matches 'ene --suite=TestService_,_Function'")
 	rootCmd.Flags().String("html", "", "generate HTML report to this path") // new
 	rootCmd.Flags().String("json", "", "generate JSON report to this path")
 	rootCmd.Flags().String("base-dir", "", "base directory for tests, defaults to current directory")
@@ -375,9 +399,49 @@ func init() {
 	dryRunCmd.Flags().Bool("debug", false, "enable debug mode")
 	dryRunCmd.Flags().String("base-dir", "", "base directory for tests, defaults to current directory")
 
+	listSuitesCmd.Flags().String("base-dir", "", "base directory for tests, defaults to current directory")
+
 	rootCmd.AddCommand(scaffoldTestCmd)
 	rootCmd.AddCommand(dryRunCmd)
+	rootCmd.AddCommand(listSuitesCmd)
 	rootCmd.AddCommand(versionCmd)
+
+	// Add custom completion for --suite flag
+	rootCmd.RegisterFlagCompletionFunc("suite", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		baseDir := cmd.Flag("base-dir").Value.String()
+		suiteNames, err := e2eframe.ListTestSuiteNames(baseDir)
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveError
+		}
+
+		// Handle comma-separated values
+		// If toComplete contains commas, we want to complete the part after the last comma
+		if strings.Contains(toComplete, ",") {
+			parts := strings.Split(toComplete, ",")
+			prefix := strings.Join(parts[:len(parts)-1], ",") + ","
+			lastPart := parts[len(parts)-1]
+
+			var completions []string
+			for _, suite := range suiteNames {
+				if strings.HasPrefix(suite, lastPart) {
+					completions = append(completions, prefix+suite)
+				}
+			}
+			return completions, cobra.ShellCompDirectiveNoFileComp
+		}
+
+		// No comma found, filter based on partial match
+		var completions []string
+		for _, suite := range suiteNames {
+			if strings.HasPrefix(suite, toComplete) {
+				completions = append(completions, suite)
+			}
+		}
+		return completions, cobra.ShellCompDirectiveNoFileComp
+	})
+
+	// Add completion command
+	rootCmd.CompletionOptions.DisableDefaultCmd = false
 }
 
 func main() {

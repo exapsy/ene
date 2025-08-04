@@ -228,6 +228,47 @@ func LoadTestSuites(baseDir string) ([]TestSuite, error) {
 	return testSuites, nil
 }
 
+// ListTestSuiteNames returns a list of test suite names from the test directory
+func ListTestSuiteNames(baseDir string) ([]string, error) {
+	if baseDir == "" {
+		baseDir, _ = os.Getwd() // Get current working directory if no baseDir is provided
+	}
+
+	testsDirPath := filepath.Join(baseDir, TestsDir)
+
+	testsDir, err := os.ReadDir(testsDirPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var suiteNames []string
+
+	for _, testDir := range testsDir {
+		if !testDir.IsDir() {
+			continue
+		}
+
+		testDirPath := filepath.Join(testsDirPath, testDir.Name())
+		suiteFilePath := filepath.Join(testDirPath, SuiteYamlFile)
+
+		// Check if suite.yml exists in this directory
+		if _, err := os.Stat(suiteFilePath); os.IsNotExist(err) {
+			continue
+		}
+
+		// Load the suite to get its name from the YAML
+		testSuite, err := LoadTestSuite(suiteFilePath)
+		if err != nil {
+			// If we can't load the suite, skip it but don't fail entirely
+			continue
+		}
+
+		suiteNames = append(suiteNames, testSuite.Name())
+	}
+
+	return suiteNames, nil
+}
+
 type RunOpts struct {
 	FilterFunc   func(test, testName string) bool
 	Verbose      bool
