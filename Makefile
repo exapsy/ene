@@ -21,7 +21,7 @@ GOMOD = $(GOCMD) mod
 .PHONY: all build clean test install version help install-completion uninstall-completion completion-bash completion-zsh completion-fish completion-powershell verify-completion
 
 # Default target
-all: build
+all: tidy deps build install
 
 # Build the binary
 build:
