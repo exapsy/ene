@@ -36,13 +36,7 @@
           },
           "kind": {
             "type": "string",
-            "enum": [
-              "mongo",
-              "http",
-              "postgres",
-              "httpmock",
-              "minio"
-            ]
+            "enum": ["mongo", "http", "postgres", "httpmock", "minio"]
           },
           "image": {
             "type": "string"
@@ -117,7 +111,7 @@
             "description": "Minio access key"
           },
           "secret_key": {
-            "type": "string", 
+            "type": "string",
             "description": "Minio secret key"
           },
           "console_port": {
@@ -142,6 +136,10 @@
           "password": {
             "type": "string",
             "description": "PostgreSQL password"
+          },
+          "migrations": {
+            "type": "string",
+            "description": "Path to the migrations file (MongoDB only)"
           }
         },
         "allOf": [
@@ -164,11 +162,7 @@
           }
         ],
         "additionalProperties": false,
-        "required": [
-          "name",
-          "kind",
-          "app_port"
-        ]
+        "required": ["name", "kind", "app_port"]
       }
     },
     "target": {
@@ -359,10 +353,7 @@
                       "type": "string"
                     },
                     "file_count": {
-                      "oneOf": [
-                        {"type": "integer"},
-                        {"type": "string"}
-                      ]
+                      "oneOf": [{ "type": "integer" }, { "type": "string" }]
                     },
                     "max_total_size": {
                       "type": "string"
@@ -541,22 +532,29 @@
                     },
                     "type": {
                       "type": "string",
-                      "enum": ["string", "int", "float", "bool", "array", "object"]
+                      "enum": [
+                        "string",
+                        "int",
+                        "float",
+                        "bool",
+                        "array",
+                        "object"
+                      ]
                     }
                   },
                   "required": ["path"],
                   "anyOf": [
-                    {"required": ["equals"]},
-                    {"required": ["not_equals"]},
-                    {"required": ["contains"]},
-                    {"required": ["not_contains"]},
-                    {"required": ["matches"]},
-                    {"required": ["not_matches"]},
-                    {"required": ["present"]},
-                    {"required": ["size"]},
-                    {"required": ["greater_than"]},
-                    {"required": ["less_than"]},
-                    {"required": ["type"]}
+                    { "required": ["equals"] },
+                    { "required": ["not_equals"] },
+                    { "required": ["contains"] },
+                    { "required": ["not_contains"] },
+                    { "required": ["matches"] },
+                    { "required": ["not_matches"] },
+                    { "required": ["present"] },
+                    { "required": ["size"] },
+                    { "required": ["greater_than"] },
+                    { "required": ["less_than"] },
+                    { "required": ["type"] }
                   ]
                 }
               },
@@ -592,13 +590,13 @@
                   },
                   "required": ["name"],
                   "anyOf": [
-                    {"required": ["equals"]},
-                    {"required": ["not_equals"]},
-                    {"required": ["contains"]},
-                    {"required": ["not_contains"]},
-                    {"required": ["matches"]},
-                    {"required": ["not_matches"]},
-                    {"required": ["present"]}
+                    { "required": ["equals"] },
+                    { "required": ["not_equals"] },
+                    { "required": ["contains"] },
+                    { "required": ["not_contains"] },
+                    { "required": ["matches"] },
+                    { "required": ["not_matches"] },
+                    { "required": ["present"] }
                   ]
                 }
               }
@@ -632,12 +630,6 @@
       }
     }
   },
-  "required": [
-    "kind",
-    "name",
-    "units",
-    "target",
-    "tests"
-  ],
+  "required": ["kind", "name", "units", "target", "tests"],
   "additionalProperties": false
 }

@@ -113,8 +113,28 @@ func NewValidationError(message, file string, line int) *DetailedError {
 	}
 }
 
-// humanizeFieldPath converts JSON schema field paths to human-readable format
-// Example: "units.0" with name "mongodb" -> "unit 'mongodb' (units[0])"
+// humanizeFieldPath converts JSON schema field paths to human-readable format.
+//
+// This function transforms technical JSON path notation (e.g., "units.0") into
+// user-friendly messages that include contextual information like names when available.
+//
+// Examples:
+//   - "(root)" -> "root level"
+//   - "units.0" with name "mongodb" -> "unit 'mongodb' (units[0])"
+//   - "tests.2" without name -> "test at tests[2]"
+//   - "fixtures.0" with name "my_fixture" -> "fixture 'my_fixture' (fixtures[0])"
+//
+// The function attempts to extract the "name" field from array elements in the
+// yamlData to provide more context. If no name is found, it falls back to a
+// generic format showing just the location.
+//
+// Parameters:
+//   - fieldPath: The JSON schema field path (e.g., "units.0", "tests.1.request")
+//   - yamlData: The parsed YAML data structure to extract names and context from
+//
+// Returns:
+//
+//	A human-readable string describing the location of the field
 func humanizeFieldPath(fieldPath string, yamlData interface{}) string {
 	// Handle root level
 	if fieldPath == "(root)" {
@@ -161,7 +181,18 @@ func humanizeFieldPath(fieldPath string, yamlData interface{}) string {
 	return result
 }
 
-// parseIndex converts a string to an integer index, returns -1 on error
+// parseIndex converts a string containing digits to an integer index.
+//
+// This helper function safely parses numeric strings without using strconv,
+// providing a simple way to convert array index strings like "0", "1", "42"
+// into their integer equivalents.
+//
+// Parameters:
+//   - s: A string containing only digits (e.g., "0", "42", "123")
+//
+// Returns:
+//
+//	The parsed integer value, or -1 if the string contains non-digit characters
 func parseIndex(s string) int {
 	var result int
 	for _, c := range s {
@@ -173,7 +204,29 @@ func parseIndex(s string) int {
 	return result
 }
 
-// humanizeSchemaErrorDescription improves the readability of JSON schema error descriptions
+// humanizeSchemaErrorDescription improves the readability of JSON schema error descriptions.
+//
+// This function transforms technical JSON schema validation error messages into
+// more user-friendly versions by:
+//   - Quoting field names for clarity
+//   - Replacing verbose phrases with concise alternatives
+//   - Adding context-specific information
+//
+// Examples:
+//   - "Additional property migrations is not allowed"
+//     -> "Field 'migrations' is not allowed for this unit type"
+//   - "Additional property env_file is not allowed"
+//     -> "Field 'env_file' is not allowed for this unit type"
+//
+// Other error types (like type mismatches, required fields, etc.) are passed
+// through unchanged, as they are already reasonably clear.
+//
+// Parameters:
+//   - description: The original JSON schema error description
+//
+// Returns:
+//
+//	An improved, more readable error description
 func humanizeSchemaErrorDescription(description string) string {
 	// Quote field names in "Additional property X" messages
 	if strings.HasPrefix(description, "Additional property ") && strings.Contains(description, " is not allowed") {

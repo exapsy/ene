@@ -3,7 +3,9 @@ package mongounit
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -140,7 +142,7 @@ func (m *MongoUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) 
 				opts.Network.Name: {m.serviceName},
 			},
 			// ExposedPorts: []string{fmt.Sprintf("%d/tcp", freePort)},
-			Image: "mongo:6.0",
+			Image: m.Image,
 			HostConfigModifier: func(hc *container.HostConfig) {
 				hc.Memory = 512 * 1024 * 1024     // 512 MB max
 				hc.MemorySwap = 512 * 1024 * 1024 // no swap beyond that
@@ -157,7 +159,94 @@ func (m *MongoUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) 
 
 	m.container = cont
 
+	// Wait for MongoDB to be ready before running migrations
+	if err := m.waitForMongoDB(ctx); err != nil {
+		return fmt.Errorf("wait for mongodb: %w", err)
+	}
+
+	// Run migrations if specified
+	if m.MigrationFilePath != "" {
+		if err := m.migrate(ctx, opts.WorkingDir); err != nil {
+			return fmt.Errorf("run migrations: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func (m *MongoUnit) migrate(ctx context.Context, workingDir string) error {
+	// Resolve migration file path relative to working directory
+	migrationPath := filepath.Join(workingDir, m.MigrationFilePath)
+
+	// Check if migration file exists
+	if _, err := os.Stat(migrationPath); os.IsNotExist(err) {
+		return fmt.Errorf("migration file does not exist: %s", migrationPath)
+	}
+
+	fmt.Printf("📦 Running MongoDB migrations from '%s'...\n", m.MigrationFilePath)
+
+	migrationContent, err := os.ReadFile(migrationPath)
+	if err != nil {
+		return fmt.Errorf("read migration file %s: %w", migrationPath, err)
+	}
+
+	// Execute the migration script using mongosh
+	// We use --quiet to suppress unnecessary output and --eval to execute the script content
+	exitCode, output, err := m.container.Exec(ctx, []string{
+		"mongosh",
+		"--quiet",
+		"--eval", string(migrationContent),
+	})
+
+	if err != nil {
+		return fmt.Errorf("execute migration script: %w", err)
+	}
+
+	// Read the output
+	outputBytes, readErr := io.ReadAll(output)
+	if readErr != nil {
+		return fmt.Errorf("read migration output: %w", readErr)
+	}
+
+	if exitCode != 0 {
+		fmt.Printf("❌ Migration failed\n")
+		return fmt.Errorf("migration script failed with exit code %d: %s", exitCode, string(outputBytes))
+	}
+
+	// Print migration output if there is any
+	outputStr := strings.TrimSpace(string(outputBytes))
+	if outputStr != "" {
+		fmt.Println(outputStr)
+	}
+
+	fmt.Printf("✅ MongoDB migrations completed successfully for unit '%s'\n", m.serviceName)
+
+	return nil
+}
+
+func (m *MongoUnit) waitForMongoDB(ctx context.Context) error {
+	// Wait for MongoDB to be ready by attempting to connect
+	maxRetries := 30
+	retryInterval := time.Second
+
+	for i := 0; i < maxRetries; i++ {
+		// Try to execute a simple command to check if MongoDB is ready
+		exitCode, _, err := m.container.Exec(ctx, []string{
+			"mongosh",
+			"--quiet",
+			"--eval", "db.adminCommand('ping')",
+		})
+
+		if err == nil && exitCode == 0 {
+			return nil
+		}
+
+		if i < maxRetries-1 {
+			time.Sleep(retryInterval)
+		}
+	}
+
+	return fmt.Errorf("mongodb did not become ready within %d seconds", maxRetries)
 }
 
 func (m *MongoUnit) WaitForReady(_ context.Context) error {
@@ -221,36 +310,6 @@ func (m *MongoUnit) Get(variable string) (string, error) {
 	}
 
 	return "", fmt.Errorf("variable %s not found", variable)
-}
-
-func (m *MongoUnit) migrate(ctx context.Context, _ string) error {
-	host, err := m.container.Host(ctx)
-	if err != nil {
-		return fmt.Errorf("get mongo host: %w", err)
-	}
-
-	port, err := m.container.MappedPort(ctx, "27017")
-	if err != nil {
-		return fmt.Errorf("get mongo port: %w", err)
-	}
-
-	migrationContent, err := os.ReadFile(m.MigrationFilePath)
-	if err != nil {
-		return fmt.Errorf("read migration file: %w", err)
-	}
-
-	// Execute the migration script
-	_, _, err = m.container.Exec(ctx, []string{
-		"mongosh",
-		"--host", host,
-		"--port", port.Port(),
-		"--eval", string(migrationContent),
-	})
-	if err != nil {
-		return fmt.Errorf("execute migration: %w", err)
-	}
-
-	return nil
 }
 
 func (m *MongoUnit) UnmarshalYAML(node *yaml.Node) error {
