@@ -113,6 +113,86 @@ func NewValidationError(message, file string, line int) *DetailedError {
 	}
 }
 
+// humanizeFieldPath converts JSON schema field paths to human-readable format
+// Example: "units.0" with name "mongodb" -> "unit 'mongodb' (units[0])"
+func humanizeFieldPath(fieldPath string, yamlData interface{}) string {
+	// Handle root level
+	if fieldPath == "(root)" {
+		return "root level"
+	}
+
+	// Parse the path to extract array indices and field names
+	parts := strings.Split(fieldPath, ".")
+
+	// Try to get context from the YAML data
+	if len(parts) >= 2 {
+		arrayName := parts[0]
+		if len(parts[1]) > 0 && parts[1][0] >= '0' && parts[1][0] <= '9' {
+			// This is an array index
+			index := parts[1]
+
+			// Try to get the name from the YAML data
+			if dataMap, ok := yamlData.(map[string]interface{}); ok {
+				if array, ok := dataMap[arrayName].([]interface{}); ok {
+					if idx := parseIndex(index); idx >= 0 && idx < len(array) {
+						if item, ok := array[idx].(map[string]interface{}); ok {
+							if name, ok := item["name"].(string); ok {
+								singularName := strings.TrimSuffix(arrayName, "s")
+								return fmt.Sprintf("%s '%s' (%s[%s])", singularName, name, arrayName, index)
+							}
+						}
+					}
+				}
+			}
+
+			// Fallback to generic message
+			singularName := strings.TrimSuffix(arrayName, "s")
+			return fmt.Sprintf("%s at %s[%s]", singularName, arrayName, index)
+		}
+	}
+
+	// Default: just format with brackets
+	result := fieldPath
+	for i := 0; i < len(parts); i++ {
+		if i > 0 && len(parts[i]) > 0 && parts[i][0] >= '0' && parts[i][0] <= '9' {
+			result = strings.Replace(result, "."+parts[i], "["+parts[i]+"]", 1)
+		}
+	}
+	return result
+}
+
+// parseIndex converts a string to an integer index, returns -1 on error
+func parseIndex(s string) int {
+	var result int
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return -1
+		}
+		result = result*10 + int(c-'0')
+	}
+	return result
+}
+
+// humanizeSchemaErrorDescription improves the readability of JSON schema error descriptions
+func humanizeSchemaErrorDescription(description string) string {
+	// Quote field names in "Additional property X" messages
+	if strings.HasPrefix(description, "Additional property ") && strings.Contains(description, " is not allowed") {
+		// Extract the field name between "Additional property " and " is not allowed"
+		start := len("Additional property ")
+		end := strings.Index(description, " is not allowed")
+		if end > start {
+			fieldName := description[start:end]
+			return fmt.Sprintf("Field '%s' is not allowed for this unit type", fieldName)
+		}
+	}
+
+	// Handle other common patterns
+	description = strings.ReplaceAll(description, "Additional property ", "Field '")
+	description = strings.ReplaceAll(description, " is not allowed", "' is not allowed")
+
+	return description
+}
+
 // NewBodyAssertValidationError creates a specialized error for body assertion validation
 func NewBodyAssertValidationError(errorType, path string, value interface{}, file string, line int) *BodyAssertError {
 	var message string

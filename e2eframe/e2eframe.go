@@ -173,7 +173,10 @@ func validateTestSuiteSchema(file *os.File, path string) error {
 		// Create a user-friendly error message from validation errors
 		var errorMessages []string
 		for _, desc := range result.Errors() {
-			errorMessages = append(errorMessages, fmt.Sprintf("- %s at %s", desc.Description(), desc.Field()))
+			// Humanize the field path and error description
+			humanPath := humanizeFieldPath(desc.Field(), yamlData)
+			humanDesc := humanizeSchemaErrorDescription(desc.Description())
+			errorMessages = append(errorMessages, fmt.Sprintf("- %s in %s", humanDesc, humanPath))
 		}
 
 		errorMsg := fmt.Sprintf("test suite validation failed:\n%s", strings.Join(errorMessages, "\n"))
