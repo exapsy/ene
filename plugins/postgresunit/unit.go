@@ -154,6 +154,10 @@ func (p *PostgresUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOption
 
 	p.exposedPort = freePort
 
+	// Emit starting event
+	p.sendEvent(opts.EventSink, e2eframe.EventContainerStarting,
+		fmt.Sprintf("starting PostgreSQL container %s", p.serviceName))
+
 	env := map[string]string{
 		"POSTGRES_DB":       p.database,
 		"POSTGRES_USER":     p.user,
@@ -209,6 +213,14 @@ func (p *PostgresUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOption
 	}
 
 	p.container = cont
+
+	// Emit started event
+	p.sendEvent(opts.EventSink, e2eframe.EventContainerStarted,
+		fmt.Sprintf("PostgreSQL container %s started", p.serviceName))
+
+	// Emit healthy event (container is healthy after WaitingFor completes)
+	p.sendEvent(opts.EventSink, e2eframe.EventContainerHealthy,
+		fmt.Sprintf("PostgreSQL container %s is healthy", p.serviceName))
 
 	// Run migrations if specified
 	if p.MigrationsPath != "" {
@@ -434,4 +446,23 @@ func UnmarshalUnit(node *yaml.Node) (e2eframe.Unit, error) {
 	}
 
 	return postgresUnit, nil
+}
+
+func (p *PostgresUnit) sendEvent(
+	eventSink e2eframe.EventSink,
+	eventType e2eframe.EventType,
+	message string,
+) {
+	if eventSink != nil {
+		eventSink <- &e2eframe.UnitEvent{
+			BaseEvent: e2eframe.BaseEvent{
+				EventType:    eventType,
+				EventTime:    time.Now(),
+				EventMessage: message,
+			},
+			UnitName: p.serviceName,
+			UnitKind: "postgres",
+			Endpoint: fmt.Sprintf("postgres://%s:%s@%s:%d/%s", p.user, p.password, p.serviceName, p.appPort, p.database),
+		}
+	}
 }

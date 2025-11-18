@@ -176,11 +176,16 @@ func validateTestSuiteSchema(file *os.File, path string) error {
 			// Humanize the field path and error description
 			humanPath := humanizeFieldPath(desc.Field(), yamlData)
 			humanDesc := humanizeSchemaErrorDescription(desc.Description())
-			errorMessages = append(errorMessages, fmt.Sprintf("- %s in %s", humanDesc, humanPath))
+			errorMessages = append(errorMessages, fmt.Sprintf("  • %s in %s", humanDesc, humanPath))
 		}
 
-		errorMsg := fmt.Sprintf("test suite validation failed:\n%s", strings.Join(errorMessages, "\n"))
-		return NewValidationError(errorMsg, path, 0)
+		// Use modern formatted error
+		errorMsg := FormatValidationError(
+			"Configuration validation failed:\n\n"+strings.Join(errorMessages, "\n"),
+			path,
+			true, // use colors
+		)
+		return fmt.Errorf("%s", errorMsg)
 	}
 
 	return nil

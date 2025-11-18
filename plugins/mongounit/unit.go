@@ -135,6 +135,10 @@ func (m *MongoUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) 
 		}
 	}
 
+	// Emit starting event
+	m.sendEvent(opts.EventSink, e2eframe.EventContainerStarting,
+		fmt.Sprintf("starting MongoDB container %s", m.serviceName))
+
 	req := testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Networks: []string{opts.Network.Name},
@@ -159,10 +163,18 @@ func (m *MongoUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) 
 
 	m.container = cont
 
+	// Emit started event
+	m.sendEvent(opts.EventSink, e2eframe.EventContainerStarted,
+		fmt.Sprintf("MongoDB container %s started", m.serviceName))
+
 	// Wait for MongoDB to be ready before running migrations
 	if err := m.waitForMongoDB(ctx); err != nil {
 		return fmt.Errorf("wait for mongodb: %w", err)
 	}
+
+	// Emit healthy event
+	m.sendEvent(opts.EventSink, e2eframe.EventContainerHealthy,
+		fmt.Sprintf("MongoDB container %s is healthy", m.serviceName))
 
 	// Run migrations if specified
 	if m.MigrationFilePath != "" {
@@ -373,8 +385,30 @@ func (m *MongoUnit) GetEnvRaw(_ *e2eframe.GetEnvRawOptions) map[string]string {
 }
 
 func (s *MongoUnit) SetEnvs(env map[string]string) {
-	for k, v := range env {
-		s.EnvVars[k] = v
+	for key, val := range env {
+		s.EnvVars[key] = val
+	}
+}
+
+func (m *MongoUnit) sendEvent(
+	eventSink e2eframe.EventSink,
+	eventType e2eframe.EventType,
+	message string,
+) {
+	if eventSink != nil {
+		// Construct endpoint dynamically
+		endpoint := fmt.Sprintf("mongodb://%s:%d", m.serviceName, m.appPort)
+
+		eventSink <- &e2eframe.UnitEvent{
+			BaseEvent: e2eframe.BaseEvent{
+				EventType:    eventType,
+				EventTime:    time.Now(),
+				EventMessage: message,
+			},
+			UnitName: m.serviceName,
+			UnitKind: "mongo",
+			Endpoint: endpoint,
+		}
 	}
 }
 

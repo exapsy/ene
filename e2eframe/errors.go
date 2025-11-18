@@ -2,7 +2,19 @@ package e2eframe
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
+)
+
+// Box drawing characters for error formatting
+const (
+	boxTopLeft     = "╭"
+	boxTopRight    = "╮"
+	boxBottomLeft  = "╰"
+	boxBottomRight = "╯"
+	boxHorizontal  = "─"
+	boxVertical    = "│"
+	boxTee         = "├"
 )
 
 // DetailedError provides structured error information with helpful context
@@ -335,4 +347,172 @@ func NewBodyAssertValidationError(errorType, path string, value interface{}, fil
 // UserFriendlyMessage returns a simple one-line error message for non-debug mode
 func (e *BodyAssertError) UserFriendlyMessage() string {
 	return e.Message
+}
+
+// FormatValidationError creates a nicely formatted validation error message
+func FormatValidationError(message, file string, useColor bool) string {
+	colorReset := ""
+	colorRed := ""
+	colorYellow := ""
+	colorBold := ""
+	colorGray := ""
+
+	if useColor {
+		colorReset = "\033[0m"
+		colorRed = "\033[31m"
+		colorYellow = "\033[33m"
+		colorBold = "\033[1m"
+		colorGray = "\033[90m"
+	}
+
+	var parts []string
+	boxWidth := 80
+
+	// Helper to calculate display width (accounting for wide characters)
+	displayWidth := func(s string) int {
+		// Strip ANSI codes first
+		ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+		stripped := ansiRegex.ReplaceAllString(s, "")
+
+		width := 0
+		for _, r := range stripped {
+			// Handle wide characters (emoji, some symbols)
+			// Based on Unicode East Asian Width property
+			if r >= 0x1F300 && r <= 0x1F9FF { // Emoji ranges
+				width += 2
+			} else if r >= 0x2E80 && r <= 0x9FFF { // CJK
+				width += 2
+			} else if r >= 0xAC00 && r <= 0xD7AF { // Hangul
+				width += 2
+			} else if r >= 0xFF00 && r <= 0xFFEF { // Fullwidth forms
+				width += 2
+			} else {
+				width += 1
+			}
+		}
+		return width
+	}
+
+	// Helper to wrap text to fit in box (using display width)
+	wrapText := func(text string, maxWidth int) []string {
+		if displayWidth(text) <= maxWidth {
+			return []string{text}
+		}
+
+		// For text with ANSI codes, we need to be careful
+		ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+		// Remove ANSI codes for splitting
+		stripped := ansiRegex.ReplaceAllString(text, "")
+
+		var lines []string
+		currentLine := ""
+		currentWidth := 0
+
+		words := strings.Fields(stripped)
+		for _, word := range words {
+			wordWidth := displayWidth(word)
+			spaceWidth := 1
+
+			if currentWidth == 0 {
+				// First word on line
+				currentLine = word
+				currentWidth = wordWidth
+			} else if currentWidth+spaceWidth+wordWidth <= maxWidth {
+				// Word fits on current line
+				currentLine += " " + word
+				currentWidth += spaceWidth + wordWidth
+			} else {
+				// Word doesn't fit, start new line
+				lines = append(lines, currentLine)
+				currentLine = word
+				currentWidth = wordWidth
+			}
+		}
+
+		if currentLine != "" {
+			lines = append(lines, currentLine)
+		}
+
+		return lines
+	}
+
+	// Helper to create a box line with content
+	// Box format: "│ content...padding... │"
+	boxLine := func(content string) string {
+		contentWidth := displayWidth(content)
+		// Total width = 80
+		// Format: "│" + " " + content + padding + " " + "│"
+		// So: 1 + 1 + contentWidth + padding + 1 + 1 = 80
+		// Therefore: padding = 76 - contentWidth
+		padding := 76 - contentWidth
+		if padding < 0 {
+			padding = 0
+		}
+		return fmt.Sprintf("%s%s%s %s%s %s%s%s",
+			colorRed, boxVertical, colorReset, content, strings.Repeat(" ", padding), colorRed, boxVertical, colorReset)
+	}
+
+	maxContentWidth := 76
+
+	// Title
+	parts = append(parts, "")
+	parts = append(parts, fmt.Sprintf("%s%s%s%s%s%s",
+		colorRed, colorBold, boxTopLeft, strings.Repeat(boxHorizontal, boxWidth-2), boxTopRight, colorReset))
+
+	titleText := fmt.Sprintf("%s%s✗ VALIDATION FAILED%s", colorBold, colorRed, colorReset)
+	parts = append(parts, boxLine(titleText))
+
+	// Empty line
+	parts = append(parts, boxLine(""))
+
+	// Split message into lines and wrap if needed
+	lines := strings.Split(message, "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		line = strings.TrimSpace(line)
+
+		// Handle bullet points
+		if strings.HasPrefix(line, "•") || strings.HasPrefix(line, "-") {
+			// Replace - with •
+			if strings.HasPrefix(line, "-") {
+				line = "•" + line[1:]
+			}
+
+			// Wrap long lines
+			wrappedLines := wrapText(line, maxContentWidth)
+			for i, wrappedLine := range wrappedLines {
+				if i == 0 {
+					content := fmt.Sprintf("%s%s%s", colorYellow, wrappedLine, colorReset)
+					parts = append(parts, boxLine(content))
+				} else {
+					// Indent continuation lines
+					content := fmt.Sprintf("%s  %s%s", colorYellow, wrappedLine, colorReset)
+					parts = append(parts, boxLine(content))
+				}
+			}
+		} else {
+			// Wrap long lines
+			wrappedLines := wrapText(line, maxContentWidth)
+			for _, wrappedLine := range wrappedLines {
+				parts = append(parts, boxLine(wrappedLine))
+			}
+		}
+	}
+
+	// File context
+	if file != "" {
+		parts = append(parts, boxLine(""))
+		fileContent := fmt.Sprintf("%s📄 %s%s", colorGray, file, colorReset)
+		parts = append(parts, boxLine(fileContent))
+	}
+
+	parts = append(parts, fmt.Sprintf("%s%s%s%s%s%s",
+		colorRed, colorBold, boxBottomLeft, strings.Repeat(boxHorizontal, boxWidth-2), boxBottomRight, colorReset))
+	parts = append(parts, "")
+
+	return strings.Join(parts, "\n")
 }

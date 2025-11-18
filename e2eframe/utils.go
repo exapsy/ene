@@ -78,6 +78,7 @@ type Color struct {
 	Purple string
 	Cyan   string
 	White  string
+	Gray   string
 	Bold   string
 }
 
@@ -95,6 +96,7 @@ func NewColor(pretty bool) Color {
 		Purple: "\033[35m",
 		Cyan:   "\033[36m",
 		White:  "\033[37m",
+		Gray:   "\033[90m",
 		Bold:   "\033[1m",
 	}
 }

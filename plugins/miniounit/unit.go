@@ -201,6 +201,10 @@ func (m *MinioUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) 
 	m.exposedPort = freePort
 	m.consolePort = consolePort
 
+	// Emit starting event
+	m.sendEvent(opts.EventSink, e2eframe.EventContainerStarting,
+		fmt.Sprintf("starting MinIO container %s", m.serviceName))
+
 	// Set up environment variables
 	env := map[string]string{
 		"MINIO_ROOT_USER":     m.accessKey,
@@ -256,10 +260,18 @@ func (m *MinioUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) 
 
 	m.container = cont
 
+	// Emit started event
+	m.sendEvent(opts.EventSink, e2eframe.EventContainerStarted,
+		fmt.Sprintf("MinIO container %s started", m.serviceName))
+
 	// Wait for Minio to be ready and create buckets if specified
 	if err := m.createBuckets(ctx); err != nil {
 		return fmt.Errorf("create buckets: %w", err)
 	}
+
+	// Emit healthy event
+	m.sendEvent(opts.EventSink, e2eframe.EventContainerHealthy,
+		fmt.Sprintf("MinIO container %s is healthy", m.serviceName))
 
 	return nil
 }
@@ -526,4 +538,23 @@ func UnmarshalUnit(node *yaml.Node) (e2eframe.Unit, error) {
 	}
 
 	return minioUnit, nil
+}
+
+func (m *MinioUnit) sendEvent(
+	eventSink e2eframe.EventSink,
+	eventType e2eframe.EventType,
+	message string,
+) {
+	if eventSink != nil {
+		eventSink <- &e2eframe.UnitEvent{
+			BaseEvent: e2eframe.BaseEvent{
+				EventType:    eventType,
+				EventTime:    time.Now(),
+				EventMessage: message,
+			},
+			UnitName: m.serviceName,
+			UnitKind: "minio",
+			Endpoint: fmt.Sprintf("http://%s:%d", m.serviceName, m.appPort),
+		}
+	}
 }
