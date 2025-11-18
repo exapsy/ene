@@ -64,9 +64,9 @@ type TestSuiteTestRequest struct {
 }
 
 type TestSuiteTestExpect struct {
-	TestBodyAsserts   []TestBodyAssert   `yaml:"body_asserts"`
-	TestHeaderAsserts []TestHeaderAssert `yaml:"header_asserts"`
-	StatusCode        int                `yaml:"status_code"`
+	TestBodyAsserts   TestBodyAsserts   `yaml:"body_asserts"`
+	TestHeaderAsserts TestHeaderAsserts `yaml:"header_asserts"`
+	StatusCode        int               `yaml:"status_code"`
 }
 
 func (t *TestSuiteTest) Name() string {
@@ -307,7 +307,13 @@ func (t *TestSuiteTest) testResult(r *http.Response, opts *e2eframe.TestSuiteTes
 		}
 	}
 
-	for _, bodyAssert := range t.Expect.TestBodyAsserts {
+	// Convert map-based body asserts to list
+	bodyAsserts, err := t.Expect.TestBodyAsserts.ToTestBodyAssertList()
+	if err != nil {
+		return fmt.Errorf("parse body asserts: %v", err)
+	}
+
+	for _, bodyAssert := range bodyAsserts {
 		opts := &TestBodyAssertTestOptions{
 			Fixtures: opts.Fixtures,
 		}
@@ -316,7 +322,13 @@ func (t *TestSuiteTest) testResult(r *http.Response, opts *e2eframe.TestSuiteTes
 		}
 	}
 
-	for _, headerAssert := range t.Expect.TestHeaderAsserts {
+	// Convert map-based header asserts to list
+	headerAsserts, err := t.Expect.TestHeaderAsserts.ToTestHeaderAssertList()
+	if err != nil {
+		return fmt.Errorf("parse header asserts: %v", err)
+	}
+
+	for _, headerAssert := range headerAsserts {
 		opts := &TestHeaderAssertTestOptions{
 			Fixtures: opts.Fixtures,
 		}

@@ -490,113 +490,113 @@
                 }
               },
               "body_asserts": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "path": {
+                "type": "object",
+                "description": "Map of JSON paths to assertion specs. Values can be strings (shorthand for equals) or objects with explicit assertions.",
+                "additionalProperties": {
+                  "oneOf": [
+                    {
                       "type": "string",
-                      "minLength": 1,
-                      "description": "JSON path to the field being tested"
+                      "description": "Shorthand for equals assertion"
                     },
-                    "equals": {
-                      "type": "string"
-                    },
-                    "not_equals": {
-                      "type": "string"
-                    },
-                    "contains": {
-                      "type": "string"
-                    },
-                    "not_contains": {
-                      "type": "string"
-                    },
-                    "matches": {
-                      "type": "string"
-                    },
-                    "not_matches": {
-                      "type": "string"
-                    },
-                    "present": {
-                      "type": "boolean"
-                    },
-                    "size": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "greater_than": {
-                      "type": "integer"
-                    },
-                    "less_than": {
-                      "type": "integer"
-                    },
-                    "type": {
-                      "type": "string",
-                      "enum": [
-                        "string",
-                        "int",
-                        "float",
-                        "bool",
-                        "array",
-                        "object"
-                      ]
+                    {
+                      "type": "object",
+                      "properties": {
+                        "equals": {
+                          "type": "string"
+                        },
+                        "not_equals": {
+                          "type": "string"
+                        },
+                        "contains": {
+                          "type": "string"
+                        },
+                        "not_contains": {
+                          "type": "string"
+                        },
+                        "matches": {
+                          "type": "string"
+                        },
+                        "not_matches": {
+                          "type": "string"
+                        },
+                        "present": {
+                          "type": "boolean"
+                        },
+                        "length": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "size": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        ">": {
+                          "type": "integer",
+                          "description": "Greater than"
+                        },
+                        "<": {
+                          "type": "integer",
+                          "description": "Less than"
+                        },
+                        "greater_than": {
+                          "type": "integer"
+                        },
+                        "less_than": {
+                          "type": "integer"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "string",
+                            "int",
+                            "float",
+                            "bool",
+                            "array",
+                            "object"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
                     }
-                  },
-                  "required": ["path"],
-                  "anyOf": [
-                    { "required": ["equals"] },
-                    { "required": ["not_equals"] },
-                    { "required": ["contains"] },
-                    { "required": ["not_contains"] },
-                    { "required": ["matches"] },
-                    { "required": ["not_matches"] },
-                    { "required": ["present"] },
-                    { "required": ["size"] },
-                    { "required": ["greater_than"] },
-                    { "required": ["less_than"] },
-                    { "required": ["type"] }
                   ]
                 }
               },
               "header_asserts": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "name": {
-                      "type": "string"
+                "type": "object",
+                "description": "Map of header names to assertion specs. Values can be strings (shorthand for equals) or objects with explicit assertions.",
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "description": "Shorthand for equals assertion"
                     },
-                    "equals": {
-                      "type": "string"
-                    },
-                    "not_equals": {
-                      "type": "string"
-                    },
-                    "contains": {
-                      "type": "string"
-                    },
-                    "not_contains": {
-                      "type": "string"
-                    },
-                    "matches": {
-                      "type": "string"
-                    },
-                    "not_matches": {
-                      "type": "string"
-                    },
-                    "present": {
-                      "type": "boolean"
+                    {
+                      "type": "object",
+                      "properties": {
+                        "equals": {
+                          "type": "string"
+                        },
+                        "not_equals": {
+                          "type": "string"
+                        },
+                        "contains": {
+                          "type": "string"
+                        },
+                        "not_contains": {
+                          "type": "string"
+                        },
+                        "matches": {
+                          "type": "string"
+                        },
+                        "not_matches": {
+                          "type": "string"
+                        },
+                        "present": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
                     }
-                  },
-                  "required": ["name"],
-                  "anyOf": [
-                    { "required": ["equals"] },
-                    { "required": ["not_equals"] },
-                    { "required": ["contains"] },
-                    { "required": ["not_contains"] },
-                    { "required": ["matches"] },
-                    { "required": ["not_matches"] },
-                    { "required": ["present"] }
                   ]
                 }
               }

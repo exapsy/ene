@@ -46,8 +46,7 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: message
-          equals: "Hello, World!"
+        message: "Hello, World!"
 ```
 
 **Run it:**
@@ -134,12 +133,11 @@ tests:
     expect:
       status_code: 201
       body_asserts:
-        - path: id
+        id:
           present: true
-        - path: name
-          equals: "John Doe"
+        name: "John Doe"
       header_asserts:
-        - name: Location
+        Location:
           contains: /users/
 
   - name: get user
@@ -150,9 +148,8 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: id
-          equals: "{{ user_id }}"
-        - path: email
+        id: "{{ user_id }}"
+        email:
           matches: "^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$"
 
   - name: update user
@@ -166,8 +163,7 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: name
-          equals: "Jane Doe"
+        name: "Jane Doe"
 
   - name: delete user
     kind: http
@@ -237,11 +233,11 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: token
+        token:
           present: true
           type: string
-        - path: expires_in
-          greater_than: 0
+        expires_in:
+          ">": 0
 
   - name: access protected endpoint
     kind: http
@@ -253,8 +249,7 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: username
-          equals: "{{ username }}"
+        username: "{{ username }}"
 
   - name: logout
     kind: http
@@ -310,10 +305,8 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: database.connected
-          equals: true
-        - path: database.name
-          equals: testdb
+        database.connected: true
+        database.name: testdb
 
   - name: list users from seed data
     kind: http
@@ -323,10 +316,9 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: users
+        users:
           type: array
-        - path: users
-          size: 2
+          length: 2
 ```
 
 **Migration file (`db.js`):**
@@ -387,10 +379,10 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: products
+        products:
           type: array
-        - path: total
-          greater_than: 0
+        total:
+          ">": 0
 ```
 
 **Migration files:**
@@ -461,9 +453,8 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: uploaded
-          equals: true
-        - path: file_id
+        uploaded: true
+        file_id:
           present: true
 
   - name: verify file in storage
@@ -590,11 +581,10 @@ tests:
     expect:
       status_code: 201
       body_asserts:
-        - path: id
+        id:
           present: true
       header_asserts:
-        - name: X-Correlation-ID
-          equals: "{{ correlation_id }}"
+        X-Correlation-ID: "{{ correlation_id }}"
 
   - name: process payment
     kind: http
@@ -607,10 +597,8 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: transaction_id
-          equals: "txn_123"
-        - path: status
-          equals: "success"
+        transaction_id: "txn_123"
+        status: "success"
 ```
 
 ---
@@ -654,7 +642,7 @@ tests:
     expect:
       status_code: 503
       body_asserts:
-        - path: error
+        error:
           contains: "unavailable"
 
   - name: handle internal error
@@ -665,8 +653,7 @@ tests:
     expect:
       status_code: 500
       body_asserts:
-        - path: code
-          equals: "ERR_INTERNAL"
+        code: "ERR_INTERNAL"
 ```
 
 ### Complex Assertions
@@ -711,26 +698,22 @@ tests:
       status_code: 200
       body_asserts:
         # Array validation
-        - path: users
+        users:
           type: array
-          size: 2
+          length: 2
         
-        # Nested field validation
-        - path: users[0].name
-          equals: "Alice"
-        
-        - path: users[0].age
-          greater_than: 18
-          less_than: 100
-        
-        - path: users[0].tags
+        # Element access
+        users.0.name: "Alice"
+        users.0.age:
+          ">": 18
+          "<": 100
+        users.0.tags:
           type: array
         
         # Metadata validation
-        - path: metadata.total
-          equals: 2
+        metadata.total: 2
         
-        - path: metadata.timestamp
+        metadata.timestamp:
           present: true
           matches: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
 ```
@@ -772,10 +755,8 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: environment
-          equals: "{{ env }}"
-        - path: features.new_ui
-          equals: true
+        environment: "{{ env }}"
+        features.new_ui: true
 ```
 
 ### Load Testing Pattern
@@ -836,8 +817,7 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: status
-          equals: "healthy"
+        status: "healthy"
 ```
 
 ---

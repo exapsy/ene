@@ -336,10 +336,9 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: status
-          equals: "ok"
+        status: "ok"
       header_asserts:
-        - name: Content-Type
+        Content-Type:
           present: true
 ```
 
@@ -457,14 +456,13 @@ Runs PostgreSQL database with migrations.
   expect:
     status_code: 201
     body_asserts:
-      - path: id
+      id:
         present: true
-      - path: name
-        equals: John Doe
-      - path: email
+      name: John Doe
+      email:
         matches: "^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$"
     header_asserts:
-      - name: Location
+      Location:
         present: true
         contains: /api/users/
 ```
@@ -497,27 +495,37 @@ Runs PostgreSQL database with migrations.
 
 ```yaml
 body_asserts:
-  - path: data.user.name        # JSONPath to field
-    equals: "John Doe"          # Exact match
-    not_equals: ""              # Not equal to
+  # String shorthand for equals
+  data.user.name: "John Doe"
+  
+  # Explicit assertions with object
+  data.user.email:
     contains: "John"            # Substring match
     not_contains: "Admin"       # Substring not present
     matches: "^John.*"          # Regex match
     not_matches: "^Admin.*"     # Regex not match
     present: true               # Field exists
-    type: string                # Type check (string, number, boolean, array, object, null)
-    greater_than: 10            # Numeric comparison
-    less_than: 100              # Numeric comparison
-    size: 5                     # Array/string length
+    type: string                # Type check (string, int, float, bool, array, object)
+  
+  # Comparison operators with symbols
+  data.user.age:
+    ">": 10                     # greater_than (numeric comparison)
+    "<": 100                    # less_than (numeric comparison)
+  
+  # Length checking
+  data.user.tags:
+    length: 5                   # Array/string length (or 'size')
 ```
 
 #### Header Assertions
 
 ```yaml
 header_asserts:
-  - name: Content-Type
-    equals: application/json
-    not_equals: text/html
+  # String shorthand for equals
+  Content-Type: application/json
+  
+  # Explicit assertions with object
+  X-Custom-Header:
     contains: json
     not_contains: xml
     matches: "^application/.*"
@@ -600,8 +608,7 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: message
-          equals: pong
+        message: pong
 EOF
 
 # Run test

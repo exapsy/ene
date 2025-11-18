@@ -174,12 +174,11 @@ tests:
   expect:
     status_code: 201
     body_asserts:
-      - path: id
+      id:
         present: true
-      - path: name
-        equals: John Doe
+      name: John Doe
     header_asserts:
-      - name: Location
+      Location:
         present: true
 ```
 
@@ -187,58 +186,56 @@ tests:
 
 ```yaml
 body_asserts:
-  # Exact match
-  - path: status
-    equals: ok
+  # Exact match (shorthand)
+  status: ok
   
   # Not equal
-  - path: error
+  error:
     not_equals: failed
   
   # Contains
-  - path: message
+  message:
     contains: success
   
   # Regex match
-  - path: email
+  email:
     matches: "^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$"
   
   # Presence
-  - path: id
+  id:
     present: true
   
   # Type check
-  - path: items
+  items:
     type: array
   
-  # Numeric comparison
-  - path: age
-    greater_than: 18
-    less_than: 100
+  # Numeric comparison (symbols)
+  age:
+    ">": 18
+    "<": 100
   
   # Size check
-  - path: tags
-    size: 3
+  tags:
+    length: 3
 ```
 
 ## Header Assertions
 
 ```yaml
 header_asserts:
-  # Exact match
-  - name: Content-Type
-    equals: application/json
+  # Exact match (shorthand)
+  Content-Type: application/json
   
   # Contains
-  - name: Set-Cookie
+  Set-Cookie:
     contains: HttpOnly
   
   # Regex
-  - name: X-Request-ID
+  X-Request-ID:
     matches: "^[0-9a-f-]{36}$"
   
   # Presence
-  - name: Authorization
+  Authorization:
     present: true
 ```
 
@@ -353,16 +350,14 @@ body_asserts:
     type: object
   
   # Top-level field
-  - path: status
-    equals: ok
+  status: ok
   
   # Nested field
-  - path: data.user.email
+  data.user.email:
     present: true
   
   # Array element
-  - path: items[0].name
-    equals: First
+  items[0].name: First
   
   # Array length
   - path: items

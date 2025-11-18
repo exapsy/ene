@@ -63,7 +63,7 @@ request:
     X-A: v1
   body: hello
 expect:
-  status: 201
+  status_code: 201
 `,
 			want: httptestplugin.TestSuiteTest{
 				TestName: "foo",

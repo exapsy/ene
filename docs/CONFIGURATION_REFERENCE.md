@@ -387,12 +387,11 @@ HTTP request/response test.
   expect:
     status_code: 201
     body_asserts:
-      - path: id
+      id:
         present: true
-      - path: name
-        equals: John Doe
+      name: John Doe
     header_asserts:
-      - name: Location
+      Location:
         present: true
 ```
 
@@ -525,104 +524,122 @@ constraints:
 
 ### Body Assertions
 
-Assertions on response body content using JSONPath.
+Assertions on response body content using JSONPath. Uses a map-based format where keys are JSON paths and values are either strings (shorthand for equals) or objects with explicit assertions.
 
 ```yaml
 body_asserts:
-  - path: user.name
-    equals: John Doe
+  # String shorthand for equals
+  user.name: John Doe
   
-  - path: user.email
+  # Explicit assertions with object
+  user.email:
     matches: "^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$"
   
-  - path: user.age
-    greater_than: 18
-    less_than: 100
+  # Comparison operators with symbols
+  user.age:
+    ">": 18        # greater_than
+    "<": 100       # less_than
   
-  - path: user.tags
-    size: 3
+  # Type and length checking
+  user.tags:
+    length: 3      # or 'size'
     type: array
   
-  - path: user.active
+  # Multiple assertions on same field
+  user.active:
     type: boolean
     equals: true
 ```
 
 #### Assertion Fields
 
-**Path Field:**
-- `path` (required): JSONPath to the field (use `$` for root document)
+**Map Key:** JSONPath to the field (use `$` for root document)
 
-**Comparison Assertions (one required):**
+**Map Value:** Either a string (shorthand for `equals`) or an object with one or more assertions:
+
+**Comparison Assertions:**
+- String value: Shorthand for equals assertion (e.g., `name: "John"`)
 - `equals`: Exact value match
 - `not_equals`: Value must not match
 - `contains`: String/array must contain substring/element
 - `not_contains`: Must not contain substring/element
 - `matches`: Regex pattern match
 - `not_matches`: Must not match regex pattern
-- `greater_than`: Numeric comparison (value > threshold)
-- `less_than`: Numeric comparison (value < threshold)
+- `>`: Numeric comparison (value > threshold)
+- `<`: Numeric comparison (value < threshold)
+- `greater_than`: Alias for `>`
+- `less_than`: Alias for `<`
 
 **Presence Assertion:**
 - `present`: Boolean - field must exist (true) or not exist (false)
 
 **Type Assertion:**
-- `type`: Expected type (`string`, `number`, `boolean`, `array`, `object`, `null`)
+- `type`: Expected type (`string`, `int`, `float`, `bool`, `array`, `object`)
 
-**Size Assertion:**
-- `size`: Expected length for strings/arrays or key count for objects
+**Size/Length Assertion:**
+- `length`: Expected length for strings/arrays or key count for objects
+- `size`: Alias for `length`
+
+**Note:** Some assertions conflict (e.g., `equals` with `contains`, `>`, `<`). Compatible combinations include `>` and `<` for range checks, `present` with any other assertion, and `type` with any other assertion.
 
 #### JSONPath Examples
 
 ```yaml
 body_asserts:
   # Root document
-  - path: $
+  $:
     type: object
   
-  # Top-level field
-  - path: status
-    equals: success
+  # Top-level field with shorthand
+  status: success
   
   # Nested field
-  - path: data.user.email
+  data.user.email:
     present: true
   
-  # Array element
-  - path: items[0].name
-    equals: First Item
+  # Array element with shorthand
+  items.0.name: First Item
   
   # Array length
-  - path: items
-    size: 5
+  items:
+    length: 5
+  
+  # Range checking
+  score:
+    ">": 0
+    "<": 100
 ```
 
 ### Header Assertions
 
-Assertions on response headers.
+Assertions on response headers. Uses a map-based format where keys are header names and values are either strings (shorthand for equals) or objects with explicit assertions.
 
 ```yaml
 header_asserts:
-  - name: Content-Type
-    equals: application/json
+  # String shorthand for equals
+  Content-Type: application/json
   
-  - name: X-Request-ID
+  # Explicit assertions with object
+  X-Request-ID:
     present: true
     matches: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
   
-  - name: Cache-Control
+  # String operations
+  Cache-Control:
     contains: no-cache
   
-  - name: Set-Cookie
+  Set-Cookie:
     not_contains: secure=false
 ```
 
 #### Assertion Fields
 
-**Name Field:**
-- `name` (required): HTTP header name (case-insensitive)
+**Map Key:** HTTP header name (case-insensitive)
 
-**Comparison Assertions (one required):**
+**Map Value:** Either a string (shorthand for `equals`) or an object with one or more assertions:
+
+**Comparison Assertions:**
+- String value: Shorthand for equals assertion (e.g., `Content-Type: application/json`)
 - `equals`: Exact value match
 - `not_equals`: Value must not match
 - `contains`: Header value must contain substring
@@ -632,6 +649,8 @@ header_asserts:
 
 **Presence Assertion:**
 - `present`: Boolean - header must exist (true) or not exist (false)
+
+**Note:** `equals` conflicts with other comparison assertions. Compatible combinations include `present` with any other assertion, `contains` with `matches`, etc.
 
 ---
 
@@ -824,8 +843,7 @@ tests:
     expect:
       status_code: 200
       body_asserts:
-        - path: status
-          equals: ok
+        status: ok
   
   - name: create user
     kind: http
@@ -838,15 +856,14 @@ tests:
     expect:
       status_code: 201
       body_asserts:
-        - path: id
+        id:
           present: true
           type: string
-        - path: created
-          equals: true
+        created: true
       header_asserts:
-        - name: Location
+        Location:
           present: true
-          matches: "^/api/users/[a-z0-9-]+$"
+          matches: "^/api/users/[0-9]+$"
   
   - name: upload file
     kind: http

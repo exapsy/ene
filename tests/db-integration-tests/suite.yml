@@ -10,7 +10,7 @@ units:
     kind: httpmock
     app_port: 8080
     routes:
-      - path: /healthcheck
+      - path: /v1/health
         method: GET
         response:
           status: 200
@@ -29,12 +29,8 @@ tests:
       method: GET
       timeout: 5s
     expect:
-      status: 200
+      status_code: 200
       body_asserts:
-        - path: data
-          present: true
-          equal: "ok"
+        data: "ok"
       header_asserts:
-        - name: Content-Type
-          present: true
-          equal: "{{ content_type_inline }}"
+        Content-Type: "{{ content_type_inline }}"

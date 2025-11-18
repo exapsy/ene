@@ -363,13 +363,13 @@ tests:
     expect:
       status: 200
       body_asserts:
-        - path: data
+        data:
           present: true
-          equal: "ok"
+          equals: "ok"
       header_asserts:
-        - name: Content-Type
+        Content-Type:
           present: true
-          equal: "{{ content_type_inline }}"
+          equals: "{{ content_type_inline }}"
 `, testName, unitsTmpl)
 
 	content := tmpl

@@ -101,8 +101,7 @@ func NewBodyAssertError(message, file string, line int) *DetailedError {
 		},
 		Examples: []string{
 			"body_asserts:",
-			"  - path: \"message\"",
-			"    equals: \"ok\"",
+			"  message: \"ok\"",
 		},
 	}
 }
@@ -283,8 +282,7 @@ func NewBodyAssertValidationError(errorType, path string, value interface{}, fil
 		}
 		examples = []string{
 			"body_asserts:",
-			"  - path: \"message\"     # ✓ Valid",
-			"    equals: \"ok\"",
+			"  message: \"ok\"     # ✓ Valid",
 		}
 
 	case "missing_path":
@@ -295,8 +293,7 @@ func NewBodyAssertValidationError(errorType, path string, value interface{}, fil
 		}
 		examples = []string{
 			"body_asserts:",
-			"  - path: \"status\"",
-			"    equals: \"success\"",
+			"  status: \"success\"",
 		}
 
 	case "no_conditions":

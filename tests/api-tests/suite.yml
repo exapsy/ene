@@ -35,12 +35,8 @@ tests:
       method: GET
       timeout: 5s
     expect:
-      status: 200
+      status_code: 200
       body_asserts:
-        - path: data
-          present: true
-          equal: "ok"
+        data: "ok"
       header_asserts:
-        - name: Content-Type
-          present: true
-          equal: "{{ content_type_inline }}"
+        Content-Type: "{{ content_type_inline }}"

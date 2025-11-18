@@ -28,6 +28,200 @@ type TestBodyAssert struct {
 	Type        BodyFieldType
 }
 
+// TestBodyAsserts is a map where keys are JSON paths and values are assertion specs
+type TestBodyAsserts map[string]interface{}
+
+func (t *TestBodyAsserts) UnmarshalYAML(node *yaml.Node) error {
+	// Decode into a regular map
+	var rawMap map[string]interface{}
+	if err := node.Decode(&rawMap); err != nil {
+		return fmt.Errorf("failed to decode body_asserts at line %d: %w", node.Line, err)
+	}
+
+	*t = rawMap
+	return nil
+}
+
+// ToTestBodyAssertList converts the map-based format to a list of TestBodyAssert
+func (t TestBodyAsserts) ToTestBodyAssertList() ([]TestBodyAssert, error) {
+	var asserts []TestBodyAssert
+
+	for path, value := range t {
+		assert, err := parseBodyAssertValue(path, value)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing assertion for path %q: %w", path, err)
+		}
+		asserts = append(asserts, assert)
+	}
+
+	return asserts, nil
+}
+
+// parseBodyAssertValue converts a value (string or map) into a TestBodyAssert
+func parseBodyAssertValue(path string, value interface{}) (TestBodyAssert, error) {
+	assert := TestBodyAssert{Path: path}
+
+	// If value is a string, it's shorthand for "equals"
+	if strValue, ok := value.(string); ok {
+		assert.Equals = strValue
+		return assert, nil
+	}
+
+	// If value is a map, parse the assertion specs
+	mapValue, ok := value.(map[string]interface{})
+	if !ok {
+		return TestBodyAssert{}, fmt.Errorf("assertion value must be either a string or an object, got %T", value)
+	}
+
+	// Track which assertions are set for conflict detection
+	setAssertions := []string{}
+
+	// Parse string assertions
+	if v, ok := mapValue["contains"].(string); ok {
+		assert.Contains = v
+		setAssertions = append(setAssertions, "contains")
+	}
+	if v, ok := mapValue["not_contains"].(string); ok {
+		assert.NotContains = v
+		setAssertions = append(setAssertions, "not_contains")
+	}
+	if v, ok := mapValue["equals"].(string); ok {
+		assert.Equals = v
+		setAssertions = append(setAssertions, "equals")
+	}
+	if v, ok := mapValue["not_equals"].(string); ok {
+		assert.NotEquals = v
+		setAssertions = append(setAssertions, "not_equals")
+	}
+	if v, ok := mapValue["matches"].(string); ok {
+		assert.Matches = v
+		setAssertions = append(setAssertions, "matches")
+	}
+	if v, ok := mapValue["not_matches"].(string); ok {
+		assert.NotMatches = v
+		setAssertions = append(setAssertions, "not_matches")
+	}
+
+	// Parse symbol operators
+	if v, ok := mapValue[">"].(int); ok {
+		assert.GreaterThan = v
+		setAssertions = append(setAssertions, ">")
+	}
+	if v, ok := mapValue["<"].(int); ok {
+		assert.LessThan = v
+		setAssertions = append(setAssertions, "<")
+	}
+	// Aliases
+	if v, ok := mapValue["greater_than"].(int); ok {
+		assert.GreaterThan = v
+		setAssertions = append(setAssertions, ">")
+	}
+	if v, ok := mapValue["less_than"].(int); ok {
+		assert.LessThan = v
+		setAssertions = append(setAssertions, "<")
+	}
+
+	// Parse boolean pointer
+	if v, ok := mapValue["present"].(bool); ok {
+		assert.Present = &v
+		setAssertions = append(setAssertions, "present")
+	}
+
+	// Parse size/length
+	if v, ok := mapValue["length"].(int); ok {
+		assert.Size = v
+		setAssertions = append(setAssertions, "length")
+	}
+	if v, ok := mapValue["size"].(int); ok {
+		assert.Size = v
+		setAssertions = append(setAssertions, "length")
+	}
+
+	// Parse type
+	if v, ok := mapValue["type"].(string); ok {
+		assert.Type = BodyFieldType(v)
+		setAssertions = append(setAssertions, "type")
+		if !assert.Type.IsValid() {
+			return TestBodyAssert{}, fmt.Errorf("invalid type %q for path %q", v, path)
+		}
+	}
+
+	// Check if at least one assertion is provided
+	if len(setAssertions) == 0 {
+		return TestBodyAssert{}, fmt.Errorf("at least one assertion must be provided for path %q", path)
+	}
+
+	// Validate assertion compatibility
+	if err := validateAssertionCompatibility(setAssertions, path); err != nil {
+		return TestBodyAssert{}, err
+	}
+
+	return assert, nil
+}
+
+// validateAssertionCompatibility checks for conflicting assertions
+func validateAssertionCompatibility(assertions []string, path string) error {
+	hasEquals := contains(assertions, "equals")
+	hasNotEquals := contains(assertions, "not_equals")
+	hasContains := contains(assertions, "contains")
+	hasNotContains := contains(assertions, "not_contains")
+	hasMatches := contains(assertions, "matches")
+	hasNotMatches := contains(assertions, "not_matches")
+	hasGreaterThan := contains(assertions, ">")
+	hasLessThan := contains(assertions, "<")
+
+	// equals conflicts with almost everything except present and type
+	if hasEquals {
+		conflicts := []string{}
+		if hasNotEquals {
+			conflicts = append(conflicts, "not_equals")
+		}
+		if hasContains {
+			conflicts = append(conflicts, "contains")
+		}
+		if hasNotContains {
+			conflicts = append(conflicts, "not_contains")
+		}
+		if hasMatches {
+			conflicts = append(conflicts, "matches")
+		}
+		if hasNotMatches {
+			conflicts = append(conflicts, "not_matches")
+		}
+		if hasGreaterThan {
+			conflicts = append(conflicts, ">")
+		}
+		if hasLessThan {
+			conflicts = append(conflicts, "<")
+		}
+		if len(conflicts) > 0 {
+			return fmt.Errorf("path %q: 'equals' assertion conflicts with: %s", path, strings.Join(conflicts, ", "))
+		}
+	}
+
+	// contains and not_contains conflict
+	if hasContains && hasNotContains {
+		return fmt.Errorf("path %q: 'contains' and 'not_contains' cannot be used together", path)
+	}
+
+	// matches and not_matches conflict
+	if hasMatches && hasNotMatches {
+		return fmt.Errorf("path %q: 'matches' and 'not_matches' cannot be used together", path)
+	}
+
+	return nil
+}
+
+// contains is a helper to check if a string slice contains a value
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
 func (t *TestBodyAssert) UnmarshalYAML(node *yaml.Node) error {
 	// Create a temporary map to safely extract values
 	var rawData map[string]interface{}
