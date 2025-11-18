@@ -618,15 +618,30 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 			}
 		}
 
-		// Notify about waiting period
+		// Wait for containers to actually terminate (with configurable timeout)
 		t.sendEvent(
 			opts.EventSink,
 			EventInfo,
 			"Waiting for containers to terminate...",
 		)
 
-		// Wait a bit longer for containers to fully terminate before network cleanup
-		time.Sleep(2 * time.Second)
+		startWait := time.Now()
+		terminationTimeout := 30 * time.Second
+		if err := WaitForContainersTermination(ctx, net, terminationTimeout); err != nil {
+			t.sendEvent(
+				opts.EventSink,
+				EventWarning,
+				fmt.Sprintf("Container termination timeout after %v: %v", time.Since(startWait), err),
+			)
+			fmt.Printf("Warning: %v\n", err)
+			// Continue anyway - ForceCleanupNetwork will do best effort cleanup
+		} else {
+			t.sendEvent(
+				opts.EventSink,
+				EventInfo,
+				fmt.Sprintf("All containers terminated in %v", time.Since(startWait)),
+			)
+		}
 
 		t.sendEvent(
 			opts.EventSink,
@@ -859,6 +874,86 @@ func (t *TestSuiteV1) interpolateVarsAndStartUnits(
 }
 
 // ForceCleanupNetwork forcefully removes all containers from a network before attempting to delete it.
+// WaitForContainersTermination waits for all containers in a network to be terminated
+// It polls the Docker API and returns when all containers are gone or timeout is reached
+func WaitForContainersTermination(ctx context.Context, net *testcontainers.DockerNetwork, timeout time.Duration) error {
+	if net == nil {
+		return nil
+	}
+
+	dockerCli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return fmt.Errorf("create docker client: %w", err)
+	}
+	defer dockerCli.Close()
+
+	// Get initial list of containers in the network
+	networkInfo, err := dockerCli.NetworkInspect(ctx, net.Name, network.InspectOptions{})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			// Network already removed, containers must be gone
+			return nil
+		}
+		return fmt.Errorf("inspect network: %w", err)
+	}
+
+	// Collect container IDs to monitor
+	containerIDs := make([]string, 0, len(networkInfo.Containers))
+	for containerID := range networkInfo.Containers {
+		containerIDs = append(containerIDs, containerID)
+	}
+
+	if len(containerIDs) == 0 {
+		// No containers to wait for
+		return nil
+	}
+
+	// Poll with exponential backoff
+	startTime := time.Now()
+	checkInterval := 100 * time.Millisecond
+	maxInterval := 1 * time.Second
+
+	for {
+		// Check if we've exceeded timeout
+		if time.Since(startTime) > timeout {
+			return fmt.Errorf("timeout waiting for %d containers to terminate after %v",
+				len(containerIDs), timeout)
+		}
+
+		// Check each container
+		remainingContainers := []string{}
+		for _, containerID := range containerIDs {
+			_, err := dockerCli.ContainerInspect(ctx, containerID)
+			if err != nil {
+				// Container not found = terminated (what we want)
+				if client.IsErrNotFound(err) {
+					continue
+				}
+				// Other errors, log but continue
+				fmt.Printf("Warning: Error inspecting container %s: %v\n", containerID[:12], err)
+				continue
+			}
+			// Container still exists
+			remainingContainers = append(remainingContainers, containerID)
+		}
+
+		// All containers terminated!
+		if len(remainingContainers) == 0 {
+			return nil
+		}
+
+		// Update container list for next iteration
+		containerIDs = remainingContainers
+
+		// Wait before next check with exponential backoff
+		time.Sleep(checkInterval)
+		checkInterval = time.Duration(float64(checkInterval) * 1.5)
+		if checkInterval > maxInterval {
+			checkInterval = maxInterval
+		}
+	}
+}
+
 func ForceCleanupNetwork(ctx context.Context, net *testcontainers.DockerNetwork) error {
 	if net == nil {
 		return nil
