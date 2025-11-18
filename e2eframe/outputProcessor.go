@@ -120,6 +120,26 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 		}
 		return p.renderer.RenderSuiteStart(suiteInfo)
 
+	case EventSuiteFinished:
+		if suiteEvent, ok := event.(*SuiteFinishedEvent); ok {
+			overhead := suiteEvent.TotalTime - suiteEvent.SetupTime - suiteEvent.TestTime
+			if overhead < 0 {
+				overhead = 0
+			}
+
+			suiteInfo := ui.SuiteFinishedInfo{
+				Name:         suiteEvent.SuiteName(),
+				SetupTime:    suiteEvent.SetupTime,
+				TestTime:     suiteEvent.TestTime,
+				TotalTime:    suiteEvent.TotalTime,
+				Overhead:     overhead,
+				PassedCount:  suiteEvent.PassedCount,
+				FailedCount:  suiteEvent.FailedCount,
+				SkippedCount: suiteEvent.SkippedCount,
+			}
+			return p.renderer.RenderSuiteFinished(suiteInfo)
+		}
+
 	case EventContainerStarting:
 		if unitEvent, ok := event.(*UnitEvent); ok {
 			containerInfo := ui.ContainerInfo{
@@ -154,9 +174,11 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 			errorMsg := ""
 			if !testEvent.Passed {
 				errorMsg = testEvent.Message()
-				// Use friendly error if available
+				// Check if error implements PrettyError interface first
 				if testEvent.Error != nil {
-					if friendlyMsg := FormatError(testEvent.Error, p.Debug); friendlyMsg != "" {
+					if prettyErr, ok := testEvent.Error.(PrettyError); ok {
+						errorMsg = prettyErr.PrettyString(p.Pretty)
+					} else if friendlyMsg := FormatError(testEvent.Error, p.Debug); friendlyMsg != "" {
 						errorMsg = friendlyMsg
 					}
 				}
@@ -266,7 +288,10 @@ func (p *StdoutHumanOutputProcessor) Flush() error {
 	for i, test := range failedTests {
 		errorMsg := test.Message()
 		if test.Error != nil {
-			if friendlyMsg := FormatError(test.Error, p.Debug); friendlyMsg != "" {
+			// Check if error implements PrettyError interface first
+			if prettyErr, ok := test.Error.(PrettyError); ok {
+				errorMsg = prettyErr.PrettyString(p.Pretty)
+			} else if friendlyMsg := FormatError(test.Error, p.Debug); friendlyMsg != "" {
 				errorMsg = friendlyMsg
 			}
 		}

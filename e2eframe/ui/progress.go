@@ -14,6 +14,7 @@ type ProgressTracker struct {
 	suiteIndex      int
 	totalSuites     int
 	suitesCompleted map[string]bool
+	suiteStartTime  map[string]time.Time // Track when each suite started
 
 	// Test tracking
 	testsRunning   map[string]*TestInfo
@@ -27,6 +28,12 @@ type ProgressTracker struct {
 	containersReady    map[string]*ContainerInfo
 	containerStartTime map[string]time.Time
 
+	// Per-suite timing breakdown
+	suiteSetupTime         map[string]time.Duration // Container setup time per suite
+	suiteTestTime          map[string]time.Duration // Test execution time per suite
+	suiteTotalTime         map[string]time.Duration // Total time per suite
+	currentSuiteSetupStart time.Time                // When current suite setup started
+
 	// Timing
 	startTime time.Time
 }
@@ -35,6 +42,7 @@ type ProgressTracker struct {
 func NewProgressTracker() *ProgressTracker {
 	return &ProgressTracker{
 		suitesCompleted:    make(map[string]bool),
+		suiteStartTime:     make(map[string]time.Time),
 		testsRunning:       make(map[string]*TestInfo),
 		testsCompleted:     make([]TestInfo, 0),
 		testsFailed:        make([]TestInfo, 0),
@@ -43,6 +51,9 @@ func NewProgressTracker() *ProgressTracker {
 		containersStarting: make(map[string]*ContainerInfo),
 		containersReady:    make(map[string]*ContainerInfo),
 		containerStartTime: make(map[string]time.Time),
+		suiteSetupTime:     make(map[string]time.Duration),
+		suiteTestTime:      make(map[string]time.Duration),
+		suiteTotalTime:     make(map[string]time.Duration),
 		startTime:          time.Now(),
 	}
 }
@@ -60,13 +71,29 @@ func (p *ProgressTracker) StartSuite(name string) {
 	defer p.mu.Unlock()
 	p.currentSuite = name
 	p.suiteIndex++
+	p.suiteStartTime[name] = time.Now()
+	p.currentSuiteSetupStart = time.Now()
 }
 
-// CompleteSuite marks a suite as completed
+// CompleteSuite marks a suite as completed and calculates timing
 func (p *ProgressTracker) CompleteSuite(name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.suitesCompleted[name] = true
+
+	// Calculate total suite time
+	if startTime, exists := p.suiteStartTime[name]; exists {
+		p.suiteTotalTime[name] = time.Since(startTime)
+	}
+}
+
+// MarkSuiteSetupComplete marks the end of suite setup phase (containers ready)
+func (p *ProgressTracker) MarkSuiteSetupComplete() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.currentSuite != "" && !p.currentSuiteSetupStart.IsZero() {
+		p.suiteSetupTime[p.currentSuite] = time.Since(p.currentSuiteSetupStart)
+	}
 }
 
 // GetCurrentSuite returns the current suite info
@@ -97,6 +124,11 @@ func (p *ProgressTracker) ReadyContainer(info ContainerInfo) {
 
 	delete(p.containersStarting, info.Name)
 	p.containersReady[info.Name] = &info
+
+	// Update current suite setup time
+	if p.currentSuite != "" && !p.currentSuiteSetupStart.IsZero() {
+		p.suiteSetupTime[p.currentSuite] = time.Since(p.currentSuiteSetupStart)
+	}
 }
 
 // GetContainerReady returns the container info with calculated duration
@@ -161,6 +193,11 @@ func (p *ProgressTracker) CompleteTest(info TestInfo) {
 		p.testsPassed = append(p.testsPassed, info)
 	} else {
 		p.testsFailed = append(p.testsFailed, info)
+	}
+
+	// Update suite test time
+	if info.SuiteName != "" {
+		p.suiteTestTime[info.SuiteName] += info.Duration
 	}
 
 	// Clean up retry count
@@ -233,4 +270,15 @@ func (p *ProgressTracker) GetSummary(skippedCount int) Summary {
 		ContainerTime:     p.GetTotalContainerTime(),
 		TestExecutionTime: testTime,
 	}
+}
+
+// GetSuiteTiming returns timing breakdown for a specific suite
+func (p *ProgressTracker) GetSuiteTiming(suiteName string) (setup, tests, total time.Duration) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	setup = p.suiteSetupTime[suiteName]
+	tests = p.suiteTestTime[suiteName]
+	total = p.suiteTotalTime[suiteName]
+	return
 }

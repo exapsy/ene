@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+// PrettyError is an interface for errors that can format themselves with colors
+// This allows errors to control their own presentation with highlighted diffs
+type PrettyError interface {
+	error
+	// PrettyString returns a formatted error message with ANSI color codes
+	// that highlight the difference between expected and actual values
+	PrettyString(useColor bool) string
+}
+
 // Box drawing characters for error formatting
 const (
 	boxTopLeft     = "╭"

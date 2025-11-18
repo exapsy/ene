@@ -558,6 +558,11 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		return fmt.Errorf("no units found in test suite %s", t.TestName)
 	}
 
+	// Track suite timing
+	suiteStartTime := time.Now()
+	var setupEndTime time.Time
+	var passedTests, failedTests, skippedTests int
+
 	// Calculate environment variable dependencies
 	varDependencies, err := t.calculateEnvDependencies()
 	if err != nil {
@@ -589,6 +594,9 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 	if err = t.interpolateVarsAndStartUnits(ctx, opts, reorderedUnits, varDependencies, net); err != nil {
 		return fmt.Errorf("interpolate vars and start units: %w", err)
 	}
+
+	// Mark end of setup phase (containers are ready)
+	setupEndTime = time.Now()
 
 	// Stop all units
 	// Remove networks
@@ -665,6 +673,9 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		return fmt.Errorf("run before all tests script: %w", err)
 	}
 
+	// Track test execution start time
+	testsStartTime := time.Now()
+
 	for _, test := range t.Tests() {
 		// Run before each test script if provided
 		err = t.runBeforeEach(ctx, opts)
@@ -712,6 +723,7 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 				false,
 				testErr.Error(),
 				time.Duration(0),
+				testErr,
 			)
 
 			return fmt.Errorf("run test %s: %w", test.Name(), testErr)
@@ -720,22 +732,26 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		if result != nil {
 			result.SuiteName = t.TestName
 			if !result.Passed {
+				failedTests++
 				t.sendTestEvent(
 					opts.EventSink,
 					result.TestName,
 					false,
 					result.MessageOrErr(),
 					result.Duration,
+					result.Err,
 				)
 
 				return nil
 			} else {
+				passedTests++
 				t.sendTestEvent(
 					opts.EventSink,
 					result.TestName,
 					true,
 					"",
 					result.Duration,
+					nil,
 				)
 			}
 		}
@@ -749,6 +765,29 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 	// Run after all tests script if provided
 	if err := t.runAfterAll(ctx, opts); err != nil {
 		return fmt.Errorf("run after all tests script: %w", err)
+	}
+
+	// Calculate timing breakdown
+	totalTime := time.Since(suiteStartTime)
+	setupTime := setupEndTime.Sub(suiteStartTime)
+	testTime := time.Since(testsStartTime)
+
+	// Send suite finished event with timing breakdown
+	if opts.EventSink != nil {
+		opts.EventSink <- &SuiteFinishedEvent{
+			BaseEvent: BaseEvent{
+				EventType:    EventSuiteFinished,
+				EventTime:    time.Now(),
+				Suite:        t.TestName,
+				EventMessage: fmt.Sprintf("Suite %s completed", t.TestName),
+			},
+			SetupTime:    setupTime,
+			TestTime:     testTime,
+			TotalTime:    totalTime,
+			PassedCount:  passedTests,
+			FailedCount:  failedTests,
+			SkippedCount: skippedTests,
+		}
 	}
 
 	return nil
@@ -792,6 +831,7 @@ func (t *TestSuiteV1) sendTestEvent(
 	passed bool,
 	message string,
 	duration time.Duration,
+	err error,
 ) {
 	if eventSink != nil {
 		eventSink <- &TestEvent{
@@ -803,6 +843,7 @@ func (t *TestSuiteV1) sendTestEvent(
 			},
 			TestName: testName,
 			Passed:   passed,
+			Error:    err,
 			Duration: duration,
 		}
 	}

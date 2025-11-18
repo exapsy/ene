@@ -37,6 +37,9 @@ type Renderer interface {
 	// RenderTestCompleted renders when a test completes
 	RenderTestCompleted(test TestInfo) error
 
+	// RenderSuiteFinished renders when a suite finishes with timing breakdown
+	RenderSuiteFinished(suite SuiteFinishedInfo) error
+
 	// RenderTransition renders an ephemeral transition state (e.g., "Preparing retry...", "Cleaning up...")
 	// This is shown with a spinner in TTY mode and is replaced by the next real event
 	RenderTransition(message string) error
@@ -54,6 +57,18 @@ type SuiteInfo struct {
 	Index    int // Current suite index (1-based)
 	Total    int // Total number of suites
 	TestsDir string
+}
+
+// SuiteFinishedInfo contains information about a completed suite with timing breakdown
+type SuiteFinishedInfo struct {
+	Name         string
+	SetupTime    time.Duration // Time spent on container setup
+	TestTime     time.Duration // Time spent executing tests
+	TotalTime    time.Duration // Total suite time
+	Overhead     time.Duration // Calculated overhead (total - setup - test)
+	PassedCount  int           // Number of passed tests
+	FailedCount  int           // Number of failed tests
+	SkippedCount int           // Number of skipped tests
 }
 
 // ContainerInfo contains information about a container

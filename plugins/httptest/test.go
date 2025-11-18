@@ -17,6 +17,35 @@ const (
 	Kind e2eframe.TestSuiteTestKind = "http"
 )
 
+// StatusMismatchError represents an HTTP status code mismatch
+type StatusMismatchError struct {
+	Expected int
+	Actual   int
+}
+
+func (e *StatusMismatchError) Error() string {
+	return fmt.Sprintf("expected status code %d, got %d", e.Expected, e.Actual)
+}
+
+// PrettyString returns a color-formatted version highlighting the diff
+func (e *StatusMismatchError) PrettyString(useColor bool) string {
+	if !useColor {
+		return e.Error()
+	}
+
+	// ANSI color codes
+	dimGray := "\033[2m\033[90m"
+	green := "\033[32m"
+	red := "\033[31m"
+	reset := "\033[0m"
+
+	return fmt.Sprintf("%sexpected status code%s %s%d%s%s, got%s %s%d%s",
+		dimGray, reset,
+		green, e.Expected, reset,
+		dimGray, reset,
+		red, e.Actual, reset)
+}
+
 type TestSuiteTest struct {
 	TestName       string
 	TestKind       string
@@ -177,6 +206,7 @@ func (t *TestSuiteTest) Run(
 		return &e2eframe.TestResult{
 			TestName: t.TestName,
 			Message:  err.Error(),
+			Err:      err,
 			Passed:   false,
 		}, nil
 	}
@@ -271,7 +301,10 @@ func (t *TestSuiteTest) Initialize(testSuite e2eframe.TestSuite) error {
 
 func (t *TestSuiteTest) testResult(r *http.Response, opts *e2eframe.TestSuiteTestRunOptions) error {
 	if r.StatusCode != t.Expect.StatusCode {
-		return fmt.Errorf("expected status code %d, got %d", t.Expect.StatusCode, r.StatusCode)
+		return &StatusMismatchError{
+			Expected: t.Expect.StatusCode,
+			Actual:   r.StatusCode,
+		}
 	}
 
 	for _, bodyAssert := range t.Expect.TestBodyAsserts {

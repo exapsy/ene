@@ -83,8 +83,57 @@ func (r *ModernRenderer) RenderSuiteStart(suite SuiteInfo) error {
 		progress = fmt.Sprintf("[%d/%d] ", suite.Index, suite.Total)
 	}
 
-	line := fmt.Sprintf("\n%s%s%s%s%s\n",
-		c.Cyan, c.Bold, progress, suite.Name, c.Reset)
+	line := fmt.Sprintf("\n%s%s%s%s%s%s%s\n",
+		c.Cyan, progress, c.Reset, c.Bold, c.White, suite.Name, c.Reset)
+
+	return r.write(line)
+}
+
+// RenderSuiteFinished renders when a suite finishes with timing breakdown
+func (r *ModernRenderer) RenderSuiteFinished(suite SuiteFinishedInfo) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Stop any active spinner
+	if r.spinnerActive {
+		r.stopSpinnerLocked()
+	}
+
+	c := r.colors
+
+	// Calculate overhead
+	overhead := suite.TotalTime - suite.SetupTime - suite.TestTime
+	if overhead < 0 {
+		overhead = 0
+	}
+
+	// Format timing strings
+	setupStr := formatDuration(suite.SetupTime)
+	testStr := formatDuration(suite.TestTime)
+	overheadStr := formatDuration(overhead)
+	totalStr := formatDuration(suite.TotalTime)
+
+	// Always show timing breakdown (both verbose and non-verbose)
+	var line string
+	if r.mode == RenderModeCI {
+		// CI mode: simple text format
+		line = fmt.Sprintf("  Suite completed: Setup: %s | Tests: %s | Overhead: %s | Total: %s\n",
+			setupStr, testStr, overheadStr, totalStr)
+	} else {
+		// Normal and verbose: colored format with icons
+		statusIcon := "✓"
+		statusColor := c.Green
+		if suite.FailedCount > 0 {
+			statusIcon = "✗"
+			statusColor = c.Red
+		}
+
+		line = fmt.Sprintf("  %s%s%s %sSetup: %s%s | Tests: %s%s | Overhead: %s%s\n",
+			statusColor, statusIcon, c.Reset,
+			c.Dim+c.Gray, c.Cyan, setupStr+c.Dim+c.Gray,
+			c.Cyan, testStr+c.Dim+c.Gray,
+			c.Cyan, overheadStr+c.Reset)
+	}
 
 	return r.write(line)
 }
@@ -290,9 +339,9 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 		}
 
 		// Verbose mode: show passing tests
-		line := fmt.Sprintf("  %s✓%s  %s %s%s%s\n",
+		line := fmt.Sprintf("  %s✓%s  %s%s%s %s%s%s\n",
 			c.Green, c.Reset,
-			test.Name,
+			c.White, test.Name, c.Reset,
 			c.Dim+c.Gray, timeStr, c.Reset)
 		return r.write(line)
 	}
@@ -316,16 +365,20 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			errorParts[i] = fmt.Sprintf("     %s└─%s %s%s%s",
+
+			// Default to red text
+			formattedLine := c.Red + line + c.Reset
+
+			errorParts[i] = fmt.Sprintf("     %s└─%s %s",
 				c.Dim+c.Gray, c.Reset,
-				c.Red, line, c.Reset)
+				formattedLine)
 		}
 		errorIndent = "\n" + strings.Join(errorParts, "\n")
 	}
 
-	line := fmt.Sprintf("  %s✗%s  %s%s%s\n",
+	line := fmt.Sprintf("  %s✗%s  %s%s%s%s%s\n",
 		c.Red, c.Reset,
-		test.Name,
+		c.White, test.Name, c.Reset,
 		retryInfo,
 		errorIndent)
 
@@ -401,19 +454,25 @@ func (r *ModernRenderer) RenderSummary(summary Summary) error {
 		c.Dim+c.Cyan, totalTimeStr))
 	sb.WriteString(c.Reset)
 
-	// Show time breakdown in verbose mode
-	if r.mode == RenderModeVerbose && (summary.ContainerTime > 0 || summary.TestExecutionTime > 0) {
+	// Show time breakdown (in both verbose and non-verbose modes)
+	if summary.ContainerTime > 0 || summary.TestExecutionTime > 0 {
 		containerTimeStr := formatDuration(summary.ContainerTime)
 		testTimeStr := formatDuration(summary.TestExecutionTime)
 		overhead := summary.TotalDuration - summary.ContainerTime - summary.TestExecutionTime
 		overheadStr := formatDuration(overhead)
 
-		sb.WriteString(fmt.Sprintf("%s  Setup: %s  |  Tests: %s  |  Overhead: %s%s\n",
-			c.Dim+c.Gray, containerTimeStr, testTimeStr, overheadStr, c.Reset))
-
-		// Explain what overhead includes
-		sb.WriteString(fmt.Sprintf("%s  (Overhead: Docker networks, framework initialization, cleanup)%s\n",
-			c.Dim+c.Gray, c.Reset))
+		// Different formatting for verbose vs non-verbose
+		if r.mode == RenderModeVerbose {
+			sb.WriteString(fmt.Sprintf("%s  Setup: %s  |  Tests: %s  |  Overhead: %s%s\n",
+				c.Dim+c.Gray, containerTimeStr, testTimeStr, overheadStr, c.Reset))
+			// Explain what overhead includes in verbose mode
+			sb.WriteString(fmt.Sprintf("%s  (Overhead: Docker networks, framework initialization, cleanup)%s\n",
+				c.Dim+c.Gray, c.Reset))
+		} else {
+			// Non-verbose: more compact, on same line or separate
+			sb.WriteString(fmt.Sprintf("%s  Setup: %s  |  Tests: %s  |  Overhead: %s%s\n",
+				c.Dim+c.Gray, containerTimeStr, testTimeStr, overheadStr, c.Reset))
+		}
 	}
 	sb.WriteString("\n")
 

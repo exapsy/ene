@@ -9,6 +9,7 @@ const (
 	// Suite lifecycle events.
 	EventSuiteStarted   EventType = "test_suite_started"
 	EventSuiteCompleted EventType = "test_suite_completed"
+	EventSuiteFinished  EventType = "test_suite_finished" // New event for suite completion with timing
 	EventSuiteError     EventType = "test_suite_error"
 	EventSuiteSkipped   EventType = "test_suite_skipped"
 
@@ -111,6 +112,17 @@ func NewEventChannel() chan Event {
 type SuiteSkippedEvent struct {
 	BaseEvent
 	TotalSuiteTests int
+}
+
+// SuiteFinishedEvent represents suite completion with timing breakdown
+type SuiteFinishedEvent struct {
+	BaseEvent
+	SetupTime    time.Duration // Time spent on container setup
+	TestTime     time.Duration // Time spent executing tests
+	TotalTime    time.Duration // Total suite time
+	PassedCount  int           // Number of passed tests
+	FailedCount  int           // Number of failed tests
+	SkippedCount int           // Number of skipped tests
 }
 
 // SuiteErrorEvent represents suite error events with preserved original error
