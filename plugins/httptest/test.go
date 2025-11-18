@@ -157,6 +157,11 @@ func (t *TestSuiteTest) Run(
 	ctx context.Context,
 	opts *e2eframe.TestSuiteTestRunOptions,
 ) (*e2eframe.TestResult, error) {
+	// Handle nil opts
+	if opts == nil {
+		opts = &e2eframe.TestSuiteTestRunOptions{}
+	}
+
 	path := t.GetPathWithFixtures(opts.Fixtures)
 	body := t.GetBodyWithFixtures(opts.Fixtures)
 	headers := t.GetHeadersWithFixtures(opts.Fixtures)
