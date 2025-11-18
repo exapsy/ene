@@ -562,6 +562,7 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 	suiteStartTime := time.Now()
 	var setupEndTime time.Time
 	var passedTests, failedTests, skippedTests int
+	var totalTestTime time.Duration
 
 	// Calculate environment variable dependencies
 	varDependencies, err := t.calculateEnvDependencies()
@@ -601,6 +602,33 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 	// Stop all units
 	// Remove networks
 	defer func() {
+		// Send suite finished event BEFORE cleanup so no extra lines are printed after
+		totalTime := time.Since(suiteStartTime)
+		setupTime := time.Duration(0)
+		if !setupEndTime.IsZero() {
+			setupTime = setupEndTime.Sub(suiteStartTime)
+		}
+
+		if opts.EventSink != nil {
+			opts.EventSink <- &SuiteFinishedEvent{
+				BaseEvent: BaseEvent{
+					EventType:    EventSuiteFinished,
+					EventTime:    time.Now(),
+					Suite:        t.TestName,
+					EventMessage: fmt.Sprintf("Suite %s completed", t.TestName),
+				},
+				SetupTime:    setupTime,
+				TestTime:     totalTestTime,
+				TotalTime:    totalTime,
+				PassedCount:  passedTests,
+				FailedCount:  failedTests,
+				SkippedCount: skippedTests,
+			}
+		}
+
+		// Small delay to ensure event is processed before cleanup messages
+		time.Sleep(10 * time.Millisecond)
+
 		// Notify that cleanup is starting
 		t.sendEvent(
 			opts.EventSink,
@@ -673,9 +701,6 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		return fmt.Errorf("run before all tests script: %w", err)
 	}
 
-	// Track test execution start time
-	testsStartTime := time.Now()
-
 	for _, test := range t.Tests() {
 		// Run before each test script if provided
 		err = t.runBeforeEach(ctx, opts)
@@ -731,6 +756,7 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 
 		if result != nil {
 			result.SuiteName = t.TestName
+			totalTestTime += result.Duration
 			if !result.Passed {
 				failedTests++
 				t.sendTestEvent(
@@ -765,29 +791,6 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 	// Run after all tests script if provided
 	if err := t.runAfterAll(ctx, opts); err != nil {
 		return fmt.Errorf("run after all tests script: %w", err)
-	}
-
-	// Calculate timing breakdown
-	totalTime := time.Since(suiteStartTime)
-	setupTime := setupEndTime.Sub(suiteStartTime)
-	testTime := time.Since(testsStartTime)
-
-	// Send suite finished event with timing breakdown
-	if opts.EventSink != nil {
-		opts.EventSink <- &SuiteFinishedEvent{
-			BaseEvent: BaseEvent{
-				EventType:    EventSuiteFinished,
-				EventTime:    time.Now(),
-				Suite:        t.TestName,
-				EventMessage: fmt.Sprintf("Suite %s completed", t.TestName),
-			},
-			SetupTime:    setupTime,
-			TestTime:     testTime,
-			TotalTime:    totalTime,
-			PassedCount:  passedTests,
-			FailedCount:  failedTests,
-			SkippedCount: skippedTests,
-		}
 	}
 
 	return nil

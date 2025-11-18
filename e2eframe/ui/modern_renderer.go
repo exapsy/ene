@@ -25,6 +25,12 @@ type ModernRenderer struct {
 	lastLineLength int
 	currentTest    string
 
+	// Suite header tracking for updating with timing
+	currentSuiteHeader string // Store suite header for updating
+	linesAfterHeader   int    // Count lines printed after suite header
+	suiteIndex         int    // Current suite index
+	totalSuites        int    // Total suites
+
 	// Spinner for progress indication
 	spinner        *Spinner
 	spinnerActive  bool
@@ -35,12 +41,15 @@ type ModernRenderer struct {
 
 // NewModernRenderer creates a new modern renderer
 func NewModernRenderer(config RendererConfig) *ModernRenderer {
-	// Auto-detect TTY if not specified
-	isTTY := config.IsTTY
+	// Auto-detect TTY for os.Stdout/Stderr
+	isTTY := false
 	if config.Writer == os.Stdout || config.Writer == os.Stderr {
 		if f, ok := config.Writer.(*os.File); ok {
 			isTTY = term.IsTerminal(int(f.Fd()))
 		}
+	} else {
+		// For other writers, use the config value
+		isTTY = config.IsTTY
 	}
 
 	// Force CI mode for non-TTY environments
@@ -86,10 +95,20 @@ func (r *ModernRenderer) RenderSuiteStart(suite SuiteInfo) error {
 	line := fmt.Sprintf("\n%s%s%s%s%s%s%s\n",
 		c.Cyan, progress, c.Reset, c.Bold, c.White, suite.Name, c.Reset)
 
+	// Store suite info for later update
+	r.currentSuiteHeader = line
+	// Start at 0 - we'll count each line printed after the header
+	// Note: the header itself has \n before and after, creating blank line + header line (2 lines total)
+	// but we only care about counting from AFTER the header
+	r.linesAfterHeader = 0
+	r.suiteIndex = suite.Index
+	r.totalSuites = suite.Total
+
 	return r.write(line)
 }
 
 // RenderSuiteFinished renders when a suite finishes with timing breakdown
+// Updates the suite header line with timing information
 func (r *ModernRenderer) RenderSuiteFinished(suite SuiteFinishedInfo) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -111,29 +130,42 @@ func (r *ModernRenderer) RenderSuiteFinished(suite SuiteFinishedInfo) error {
 	setupStr := formatDuration(suite.SetupTime)
 	testStr := formatDuration(suite.TestTime)
 	overheadStr := formatDuration(overhead)
-	totalStr := formatDuration(suite.TotalTime)
 
-	// Always show timing breakdown (both verbose and non-verbose)
-	var line string
-	if r.mode == RenderModeCI {
-		// CI mode: simple text format
-		line = fmt.Sprintf("  Suite completed: Setup: %s | Tests: %s | Overhead: %s | Total: %s\n",
-			setupStr, testStr, overheadStr, totalStr)
-	} else {
-		// Normal and verbose: colored format with icons
-		statusIcon := "✓"
-		statusColor := c.Green
-		if suite.FailedCount > 0 {
-			statusIcon = "✗"
-			statusColor = c.Red
+	// In TTY mode, go back and update the suite header
+	if r.isTTY && r.linesAfterHeader > 0 {
+		// Move cursor up to get back to the header line
+		// We need to move up linesAfterHeader lines to get to just after the header,
+		// then one more line to reach the header itself
+		r.write(fmt.Sprintf("\033[%dA", r.linesAfterHeader))
+		r.write("\033[1A")
+
+		// Move to beginning of line and clear it
+		r.write("\r\033[2K")
+
+		// Rewrite header with timing appended
+		progress := ""
+		if r.totalSuites > 0 {
+			progress = fmt.Sprintf("[%d/%d] ", r.suiteIndex, r.totalSuites)
 		}
 
-		line = fmt.Sprintf("  %s%s%s %sSetup: %s%s | Tests: %s%s | Overhead: %s%s\n",
-			statusColor, statusIcon, c.Reset,
-			c.Dim+c.Gray, c.Cyan, setupStr+c.Dim+c.Gray,
-			c.Cyan, testStr+c.Dim+c.Gray,
-			c.Cyan, overheadStr+c.Reset)
+		timingInfo := fmt.Sprintf(" %s(Setup: %s | Tests: %s | Overhead: %s)%s",
+			c.Dim+c.Gray, setupStr, testStr, overheadStr, c.Reset)
+
+		updatedLine := fmt.Sprintf("%s%s%s%s%s%s%s%s",
+			c.Cyan, progress, c.Reset, c.Bold, c.White, suite.Name, c.Reset, timingInfo)
+
+		r.write(updatedLine)
+
+		// Move cursor back down past the header and all content
+		r.write(fmt.Sprintf("\033[%dB", r.linesAfterHeader+1))
+		r.write("\r")
+
+		return nil
 	}
+
+	// Non-TTY mode: just print timing on a separate line
+	line := fmt.Sprintf("  %s(Setup: %s | Tests: %s | Overhead: %s)%s\n",
+		c.Dim+c.Gray, setupStr, testStr, overheadStr, c.Reset)
 
 	return r.write(line)
 }
@@ -145,6 +177,11 @@ func (r *ModernRenderer) RenderContainerStarting(container ContainerInfo) error 
 
 	// Track start time
 	r.tracker.StartContainer(container)
+
+	// Count lines after suite header
+	if r.mode == RenderModeVerbose {
+		r.linesAfterHeader++
+	}
 
 	// Only show in verbose mode or with spinner in normal mode
 	if r.mode == RenderModeCI {
@@ -183,6 +220,9 @@ func (r *ModernRenderer) RenderContainerReady(container ContainerInfo) error {
 	if r.spinnerActive {
 		r.stopSpinnerLocked()
 	}
+
+	// Count lines after suite header
+	r.linesAfterHeader++
 
 	// Let tracker calculate duration from start time
 	r.tracker.ReadyContainer(container)
@@ -260,6 +300,7 @@ func (r *ModernRenderer) RenderTestStarted(test TestInfo) error {
 	} else if r.mode == RenderModeVerbose {
 		// Verbose mode: show with newline
 		line = fmt.Sprintf("  ▶  %s...\n", test.Name)
+		r.linesAfterHeader++
 	}
 
 	if line != "" {
@@ -281,6 +322,7 @@ func (r *ModernRenderer) RenderTestRetrying(test TestInfo, attempt, maxAttempts 
 		c := r.colors
 		line := fmt.Sprintf("  %s⟳%s  %s (retry %d/%d)...\n",
 			c.Dim+c.Yellow, c.Reset, test.Name, attempt, maxAttempts)
+		r.linesAfterHeader++
 		return r.write(line)
 	}
 
@@ -316,6 +358,8 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 		r.stopSpinnerLocked()
 	}
 
+	// Line counting is done inside the if/else branches below
+
 	// Clear any in-progress line in TTY mode
 	if r.isTTY && r.lastLineLength > 0 {
 		if err := r.clearLine(); err != nil {
@@ -343,6 +387,7 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 			c.Green, c.Reset,
 			c.White, test.Name, c.Reset,
 			c.Dim+c.Gray, timeStr, c.Reset)
+		r.linesAfterHeader++
 		return r.write(line)
 	}
 
@@ -357,6 +402,7 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 	}
 
 	errorIndent := ""
+	errorLineCount := 0
 	if test.ErrorMessage != "" {
 		// Format error message with proper indentation
 		errorLines := strings.Split(test.ErrorMessage, "\n")
@@ -372,6 +418,7 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 			errorParts[i] = fmt.Sprintf("     %s└─%s %s",
 				c.Dim+c.Gray, c.Reset,
 				formattedLine)
+			errorLineCount++
 		}
 		errorIndent = "\n" + strings.Join(errorParts, "\n")
 	}
@@ -381,6 +428,9 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 		c.White, test.Name, c.Reset,
 		retryInfo,
 		errorIndent)
+
+	// Count lines: 1 for test line + error lines
+	r.linesAfterHeader += 1 + errorLineCount
 
 	return r.write(line)
 }
@@ -396,6 +446,9 @@ func (r *ModernRenderer) RenderTransition(message string) error {
 	if r.mode == RenderModeVerbose || r.mode == RenderModeCI {
 		line := fmt.Sprintf("  %s⋯%s  %s\n",
 			c.Dim+c.Gray, c.Reset, message)
+		if r.mode == RenderModeVerbose {
+			r.linesAfterHeader++
+		}
 		return r.write(line)
 	}
 
@@ -417,6 +470,7 @@ func (r *ModernRenderer) RenderTransition(message string) error {
 	// Use lighter gray text to indicate it's informational but keep it readable
 	line := fmt.Sprintf("  %s⋯  %s%s\n",
 		c.Gray, message, c.Reset)
+	r.linesAfterHeader++
 	return r.write(line)
 }
 
