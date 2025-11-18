@@ -8,8 +8,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/exapsy/ene/e2eframe/ui"
 )
 
 type EventConsumer interface {
@@ -37,6 +38,11 @@ type StdoutHumanOutputProcessor struct {
 	color   Color
 	// testsSecretary is used to keep track of running tests and their statuses.
 	testsSecretary *TestsSecretary
+	// renderer is the modern UI renderer
+	renderer ui.Renderer
+	// suiteCount tracks total and current suite index
+	totalSuites  int
+	currentSuite int
 }
 
 type StdoutHumanOutputProcessorParams struct {
@@ -50,9 +56,26 @@ type StdoutHumanOutputProcessorParams struct {
 	Debug bool
 	// TestsSecretary is used to keep track of running tests and their statuses.
 	TestsSecretary *TestsSecretary
+	// TotalSuites is the total number of suites to run
+	TotalSuites int
 }
 
 func NewStdoutHumanOutputProcessor(params StdoutHumanOutputProcessorParams) OutputProcessor {
+	// Determine render mode based on verbose flag
+	mode := ui.RenderModeNormal
+	if params.Verbose {
+		mode = ui.RenderModeVerbose
+	}
+
+	// Create modern renderer
+	renderer := ui.NewModernRenderer(ui.RendererConfig{
+		Writer: params.Output,
+		Mode:   mode,
+		Pretty: params.Pretty,
+		Debug:  params.Debug,
+		IsTTY:  false, // Will be auto-detected
+	})
+
 	proc := &StdoutHumanOutputProcessor{
 		Sink: params.Output,
 
@@ -63,13 +86,17 @@ func NewStdoutHumanOutputProcessor(params StdoutHumanOutputProcessorParams) Outp
 
 		color:          NewColor(params.Pretty),
 		testsSecretary: params.TestsSecretary,
+		renderer:       renderer,
+		totalSuites:    params.TotalSuites,
+		currentSuite:   0,
 	}
 
+	// Print header
 	color := proc.color
-	proc.printf("%s%s▶ RUNNING%s\n",
-		color.Bold, color.Blue, color.Reset)
-	proc.printf("%s%s══════════════════════════════════════════════════════════════%s\n",
-		color.Bold, color.Blue, color.Reset)
+	proc.printf("%s%s▶ TEST RUN STARTED%s\n",
+		color.Bold, color.Cyan, color.Reset)
+	proc.printf("%s%s══════════════════════════════════════════════════════════════════════════%s\n",
+		color.Dim, color.Gray, color.Reset)
 
 	return proc
 }
@@ -83,96 +110,87 @@ func (p *StdoutHumanOutputProcessor) printf(format string, args ...any) {
 }
 
 func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
-	color := p.color
-
 	switch event.Type() {
 	case EventSuiteStarted:
-		p.printf("%s▶ SUITE STARTED: %s%s\n",
-			color.Cyan+color.Bold, event.SuiteName(), color.Reset,
-		)
+		p.currentSuite++
+		suiteInfo := ui.SuiteInfo{
+			Name:  event.SuiteName(),
+			Index: p.currentSuite,
+			Total: p.totalSuites,
+		}
+		return p.renderer.RenderSuiteStart(suiteInfo)
 
 	case EventContainerStarting:
-		if !p.Verbose {
-			return nil
-		}
-
 		if unitEvent, ok := event.(*UnitEvent); ok {
-			p.printf("%s  ⚙ CONTAINER STARTING:%s %s (%s)\n",
-				color.Yellow, color.Reset, unitEvent.UnitName, unitEvent.UnitKind)
-		}
-	case EventContainerStarted:
-		if !p.Verbose {
-			return nil
-		}
-
-		if unitEvent, ok := event.(*UnitEvent); ok {
-			p.printf("%s  ▶ CONTAINER STARTED:%s %s at %s\n",
-				color.Blue, color.Reset, unitEvent.UnitName, unitEvent.Endpoint)
+			containerInfo := ui.ContainerInfo{
+				Name: unitEvent.UnitName,
+				Kind: string(unitEvent.UnitKind),
+			}
+			return p.renderer.RenderContainerStarting(containerInfo)
 		}
 
 	case EventContainerHealthy:
-		if !p.Verbose {
-			return nil
-		}
-
 		if unitEvent, ok := event.(*UnitEvent); ok {
-			p.printf("%s  ✓ CONTAINER READY:%s %s at %s\n",
-				color.Green, color.Reset, unitEvent.UnitName, unitEvent.Endpoint)
+			containerInfo := ui.ContainerInfo{
+				Name:     unitEvent.UnitName,
+				Kind:     string(unitEvent.UnitKind),
+				Endpoint: unitEvent.Endpoint,
+				Duration: time.Since(unitEvent.Timestamp()),
+			}
+			return p.renderer.RenderContainerReady(containerInfo)
 		}
 
 	case EventTestStarted:
 		if testEvent, ok := event.(*TestEvent); ok {
-			p.printf("%s  ▶ TEST RUNNING:%s %s\n",
-				color.Blue, color.Reset, testEvent.TestName)
+			testInfo := ui.TestInfo{
+				SuiteName: testEvent.SuiteName(),
+				Name:      testEvent.TestName,
+			}
+			return p.renderer.RenderTestStarted(testInfo)
 		}
 
 	case EventTestCompleted:
 		if testEvent, ok := event.(*TestEvent); ok {
-			// Only show real-time test results in verbose mode
-			if !p.Verbose {
-				return nil
+			errorMsg := ""
+			if !testEvent.Passed {
+				errorMsg = testEvent.Message()
+				// Use friendly error if available
+				if testEvent.Error != nil {
+					if friendlyMsg := FormatError(testEvent.Error, p.Debug); friendlyMsg != "" {
+						errorMsg = friendlyMsg
+					}
+				}
 			}
 
-			// Verbose mode: show all test results
-			duration := testEvent.Duration
-			timeStr := ""
-			if duration < time.Second {
-				timeStr = fmt.Sprintf("%.0fms", duration.Seconds()*1000)
-			} else {
-				timeStr = fmt.Sprintf("%.2fs", duration.Seconds())
+			testInfo := ui.TestInfo{
+				SuiteName:    testEvent.SuiteName(),
+				Name:         testEvent.TestName,
+				Passed:       testEvent.Passed,
+				Duration:     testEvent.Duration,
+				ErrorMessage: errorMsg,
+				RetryCount:   0, // Will be set if there were retries
 			}
-
-			if testEvent.Passed {
-				p.printf("%s  ✓ TEST PASSED:%s %s (%s)\n",
-					color.Green, color.Reset, testEvent.TestName, timeStr)
-			} else {
-				p.printf("%s  ✖ TEST FAILED:%s %s (%s) - %s\n",
-					color.Red, color.Reset, testEvent.TestName, timeStr, testEvent.Message())
-			}
+			return p.renderer.RenderTestCompleted(testInfo)
 		}
 
 	case EventTestRetrying:
 		if testEvent, ok := event.(*TestRetryingEvent); ok {
-			if !p.Verbose {
-				return nil
+			testInfo := ui.TestInfo{
+				SuiteName: testEvent.SuiteName(),
+				Name:      testEvent.TestName,
 			}
-			retryCount := testEvent.RetryCount
-			maxRetries := testEvent.MaxRetries
-			p.printf("%s  🔄 TEST RETRYING:%s %s (attempt %d/%d)\n",
-				color.Yellow, color.Reset, testEvent.TestName, retryCount, maxRetries)
+			return p.renderer.RenderTestRetrying(testInfo, testEvent.RetryCount, testEvent.MaxRetries)
 		}
 
 	case EventSuiteSkipped:
-		if suiteEvent, ok := event.(*SuiteSkippedEvent); ok {
-			if p.Verbose {
-				p.printf("%s⏭ SUITE SKIPPED:%s %s - %s\n",
-					color.Purple, color.Reset, suiteEvent.SuiteName(), suiteEvent.Message())
-			}
-		}
+		// Handle skipped suites if needed
+		// For now, we'll track this in the secretary and show in summary
 
 	case EventSuiteError:
+		// Handle suite errors
+		// For now, we'll let the old system handle this
+		color := p.color
 		if suiteEvent, ok := event.(*SuiteErrorEvent); ok {
-			// Format error message based on debug mode
 			var errorMsg string
 			if suiteEvent.Error != nil {
 				errorMsg = FormatError(suiteEvent.Error, p.Debug)
@@ -182,25 +200,8 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 			p.printf("%s✖ SUITE ERROR:%s %s - %s\n",
 				color.Red, color.Reset, suiteEvent.SuiteName(), errorMsg)
 		} else if suiteEvent, ok := event.(*BaseEvent); ok {
-			// Fallback for old BaseEvent type
 			p.printf("%s✖ SUITE ERROR:%s %s - %s\n",
 				color.Red, color.Reset, suiteEvent.SuiteName(), suiteEvent.Message())
-		}
-
-	case EventNetworkDestroyed:
-		if networkEvent, ok := event.(*BaseEvent); ok {
-			if p.Verbose {
-				p.printf("%s  🗑 NETWORK DESTROYED:%s %s\n",
-					color.Yellow, color.Reset, networkEvent.Message())
-			}
-		}
-
-	case EventNetworkCreated:
-		if networkEvent, ok := event.(*BaseEvent); ok {
-			if p.Verbose {
-				p.printf("%s  🆕 NETWORK CREATED:%s %s\n",
-					color.Green, color.Reset, networkEvent.Message())
-			}
 		}
 	}
 
@@ -208,161 +209,49 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 }
 
 func (p *StdoutHumanOutputProcessor) Flush() error {
-	color := p.color
-
-	// No specific flush logic needed for stdout output
-	startTime := p.testsSecretary.StartTime()
+	// Convert test secretary data to UI summary format
 	passedTests := p.testsSecretary.PassedTests()
 	failedTests := p.testsSecretary.FailedTests()
 	skippedTests := p.testsSecretary.SkippedTests()
 
-	if len(passedTests) > 0 {
-		fmt.Printf("\n%s%s✓ PASSED%s\n",
-			color.Bold, color.Green, color.Reset)
-		fmt.Printf("%s%s──────────────────────────────────────────────────────────────%s\n",
-			color.Bold, color.Green, color.Reset)
-
-		// Group by test suite
-		passedBySuite := make(map[string][]TestEvent)
-
-		for _, test := range passedTests {
-			suiteName := test.SuiteName()
-			if suiteName == "" {
-				suiteName = "Unknown Suite"
-			}
-
-			passedBySuite[suiteName] = append(passedBySuite[suiteName], test)
+	// Convert to UI test info format
+	passedInfos := make([]ui.TestInfo, len(passedTests))
+	for i, test := range passedTests {
+		passedInfos[i] = ui.TestInfo{
+			SuiteName: test.SuiteName(),
+			Name:      test.TestName,
+			Passed:    true,
+			Duration:  test.Duration,
 		}
+	}
 
-		for suiteName, tests := range passedBySuite {
-			fmt.Printf("%s%s✓ Suite: %s%s\n", color.Bold, color.Green, suiteName, color.Reset)
-
-			for _, test := range tests {
-				duration := test.Duration
-				timeStr := ""
-				if duration < time.Second {
-					timeStr = fmt.Sprintf("%.0fms", duration.Seconds()*1000)
-				} else {
-					timeStr = fmt.Sprintf("%.2fs", duration.Seconds())
-				}
-				fmt.Printf("  %s%s✓ %s%s (%s)\n", color.Bold, color.Green, test.TestName, color.Reset, timeStr)
+	failedInfos := make([]ui.TestInfo, len(failedTests))
+	for i, test := range failedTests {
+		errorMsg := test.Message()
+		if test.Error != nil {
+			if friendlyMsg := FormatError(test.Error, p.Debug); friendlyMsg != "" {
+				errorMsg = friendlyMsg
 			}
 		}
-	}
 
-	elapsedTime := time.Since(startTime)
-	total := len(p.testsSecretary.CompletedTests())
-
-	if len(failedTests) > 0 {
-		fmt.Printf("\n%s%s▶ FAILED%s\n",
-			color.Bold, color.Red, color.Reset)
-		fmt.Printf("%s%s══════════════════════════════════════════════════════════════%s\n",
-			color.Bold, color.Red, color.Reset)
-
-		// Group failures by suite
-		failuresBySuite := make(map[string][]TestEvent)
-		for _, failure := range failedTests {
-			failuresBySuite[failure.SuiteName()] = append(
-				failuresBySuite[failure.SuiteName()],
-				failure,
-			)
-		}
-
-		// Print failures grouped by suite
-		for suiteName, suiteFailures := range failuresBySuite {
-			fmt.Printf("\n%s%s▶ Suite: %s%s\n",
-				color.Bold, color.Yellow, suiteName, color.Reset)
-
-			for _, failure := range suiteFailures {
-				duration := failure.Duration
-				timeStr := ""
-				if duration < time.Second {
-					timeStr = fmt.Sprintf("%.0fms", duration.Seconds()*1000)
-				} else {
-					timeStr = fmt.Sprintf("%.2fs", duration.Seconds())
-				}
-				fmt.Printf("\n  %s%s✖ Test: %s%s (%s)\n",
-					color.Bold, color.Red, failure.TestName, color.Reset, timeStr)
-
-				if !failure.Passed && failure.Message() == "" {
-					fmt.Printf("    %s%sNo error message provided%s\n",
-						color.Bold, color.Red, color.Reset)
-					continue
-				}
-
-				// Check if has friedly error message
-				msg := FormatError(failure.Error, p.Debug)
-				if msg != "" {
-					fmt.Printf("    %s%s%s%s\n",
-						color.Bold, color.Red, msg, color.Reset)
-					continue
-				}
-
-				// Split error messages if there are multiple
-				errorMsg := failure.Message()
-				if strings.TrimSpace(errorMsg) == "" {
-					continue
-				}
-
-				// if error is multi-line, add indentation
-				if strings.Contains(errorMsg, "\n") {
-					lines := strings.Split(errorMsg, "\n")
-					for i, line := range lines {
-						if i == 0 {
-							errorMsg = fmt.Sprintf("    %s", line)
-						} else {
-							errorMsg += fmt.Sprintf("\n    %s", line)
-						}
-					}
-				} else {
-					errorMsg = fmt.Sprintf("    %s", errorMsg)
-				}
-
-				fmt.Printf("%s\n", errorMsg)
-			}
+		failedInfos[i] = ui.TestInfo{
+			SuiteName:    test.SuiteName(),
+			Name:         test.TestName,
+			Passed:       false,
+			Duration:     test.Duration,
+			ErrorMessage: errorMsg,
 		}
 	}
 
-	// Print summary
-	fmt.Printf("\n%s%s▶ TEST SUMMARY (%.2fs)%s\n",
-		color.Bold, color.Blue, elapsedTime.Seconds(), color.Reset)
-	fmt.Printf("%s%s══════════════════════════════════════════════════════════════%s\n",
-		color.Bold, color.Blue, color.Reset)
-
-	if len(failedTests) > 0 {
-		fmt.Printf(
-			"%s%s✖ FAILED:%s %d/%d (%.1f%%)\n",
-			color.Bold,
-			color.Red,
-			color.Reset,
-			len(failedTests),
-			total,
-			float64(len(failedTests))/float64(total)*100,
-		)
+	summary := ui.Summary{
+		TotalDuration: time.Since(p.testsSecretary.StartTime()),
+		TotalTests:    len(p.testsSecretary.CompletedTests()),
+		PassedTests:   passedInfos,
+		FailedTests:   failedInfos,
+		SkippedTests:  len(skippedTests),
 	}
 
-	if len(passedTests) > 0 {
-		fmt.Printf(
-			"%s%s✓ PASSED:%s %d/%d (%.1f%%)\n",
-			color.Bold,
-			color.Green,
-			color.Reset,
-			len(passedTests),
-			total,
-			float64(len(passedTests))/float64(total)*100,
-		)
-	}
-
-	fmt.Printf("%s%s▶ TOTAL:%s %d tests\n",
-		color.Bold, color.White, color.Reset, total)
-
-	// Update summary to include skipped tests
-	if len(skippedTests) > 0 {
-		fmt.Printf("%s%s▶ SKIPPED:%s %d tests (filtered out)\n",
-			color.Bold, color.Cyan, color.Reset, len(skippedTests))
-	}
-
-	return nil
+	return p.renderer.RenderSummary(summary)
 }
 
 // HTMLReportProcessor generates an HTML report of test results.

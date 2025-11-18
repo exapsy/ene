@@ -236,6 +236,35 @@ func LoadTestSuites(baseDir string) ([]TestSuite, error) {
 	return testSuites, nil
 }
 
+// CountFilteredTestSuites returns the count of test suites that would be run with the given filter
+func CountFilteredTestSuites(baseDir string, filterFunc func(suiteName, testName string) bool) (int, error) {
+	testSuites, err := LoadTestSuites(baseDir)
+	if err != nil {
+		return 0, fmt.Errorf("load test suites: %w", err)
+	}
+
+	if filterFunc == nil {
+		return len(testSuites), nil
+	}
+
+	count := 0
+	for _, testSuite := range testSuites {
+		// Check if any test in this suite passes the filter
+		hasMatchingTest := false
+		for _, test := range testSuite.Tests() {
+			if filterFunc(testSuite.Name(), test.Name()) {
+				hasMatchingTest = true
+				break
+			}
+		}
+		if hasMatchingTest {
+			count++
+		}
+	}
+
+	return count, nil
+}
+
 // ListTestSuiteNames returns a list of test suite names from the test directory
 func ListTestSuiteNames(baseDir string) ([]string, error) {
 	if baseDir == "" {

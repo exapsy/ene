@@ -76,6 +76,13 @@ var rootCmd = &cobra.Command{
 			return false
 		}
 
+		// Count total suites that will be run (for progress tracking)
+		totalSuites, err := e2eframe.CountFilteredTestSuites(baseDir, shouldIncludeTest)
+		if err != nil {
+			fmt.Printf("%s%s✖ ERROR: %v%s\n", colorBold, colorRed, err, colorReset)
+			os.Exit(1)
+		}
+
 		// Collect test results
 		eventChan := e2eframe.NewEventChannel()
 		var eventSink e2eframe.EventSink = eventChan
@@ -84,7 +91,7 @@ var rootCmd = &cobra.Command{
 		maxRetries := 3       // Keep reliable retry behavior
 		isCleanupCache = true // Always cleanup for better performance
 
-		err := e2eframe.Run(context.Background(), &e2eframe.RunOpts{
+		err = e2eframe.Run(context.Background(), &e2eframe.RunOpts{
 			FilterFunc:   shouldIncludeTest,
 			Verbose:      isVerbose,
 			Parallel:     isParallel,
@@ -109,6 +116,7 @@ var rootCmd = &cobra.Command{
 				Debug:          isDebug,
 				TestsSecretary: testsSecretary,
 				Output:         os.Stdout,
+				TotalSuites:    totalSuites,
 			}),
 		}
 

@@ -80,6 +80,7 @@ type Color struct {
 	White  string
 	Gray   string
 	Bold   string
+	Dim    string
 }
 
 func NewColor(pretty bool) Color {
@@ -98,5 +99,6 @@ func NewColor(pretty bool) Color {
 		White:  "\033[37m",
 		Gray:   "\033[90m",
 		Bold:   "\033[1m",
+		Dim:    "\033[2m",
 	}
 }
