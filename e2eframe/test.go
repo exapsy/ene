@@ -340,6 +340,12 @@ func (t *TestSuiteV1) runBeforeAll(ctx context.Context, opts *RunTestOptions) er
 		return nil
 	}
 
+	t.sendEvent(
+		opts.EventSink,
+		EventScriptExecuting,
+		"Running beforeAll setup...",
+	)
+
 	if err := t.runScript(ctx, t.TestBeforeAll, opts); err != nil {
 		return fmt.Errorf("run before all tests script: %w", err)
 	}
@@ -351,6 +357,12 @@ func (t *TestSuiteV1) runAfterAll(ctx context.Context, opts *RunTestOptions) err
 	if t.TestAfterAll == "" {
 		return nil
 	}
+
+	t.sendEvent(
+		opts.EventSink,
+		EventScriptExecuting,
+		"Running afterAll cleanup...",
+	)
 
 	if err := t.runScript(ctx, t.TestAfterAll, opts); err != nil {
 		return fmt.Errorf("run after all tests script: %w", err)
@@ -364,6 +376,12 @@ func (t *TestSuiteV1) runBeforeEach(ctx context.Context, opts *RunTestOptions) e
 		return nil
 	}
 
+	t.sendEvent(
+		opts.EventSink,
+		EventScriptExecuting,
+		"Running beforeEach setup...",
+	)
+
 	if err := t.runScript(ctx, t.TestBeforeEach, opts); err != nil {
 		return fmt.Errorf("run before each test script: %w", err)
 	}
@@ -375,6 +393,12 @@ func (t *TestSuiteV1) runAfterEach(ctx context.Context, opts *RunTestOptions) er
 	if t.TestAfterEach == "" {
 		return nil
 	}
+
+	t.sendEvent(
+		opts.EventSink,
+		EventScriptExecuting,
+		"Running afterEach cleanup...",
+	)
 
 	if err := t.runScript(ctx, t.TestAfterEach, opts); err != nil {
 		return fmt.Errorf("run after each test script: %w", err)
@@ -569,6 +593,13 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 	// Stop all units
 	// Remove networks
 	defer func() {
+		// Notify that cleanup is starting
+		t.sendEvent(
+			opts.EventSink,
+			EventInfo,
+			"Cleaning up containers...",
+		)
+
 		// Stop all units and wait for them to fully terminate
 		for i := len(reorderedUnits) - 1; i >= 0; i-- {
 			unit := reorderedUnits[i]
@@ -576,13 +607,32 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 				continue
 			}
 
+			t.sendEvent(
+				opts.EventSink,
+				EventContainerStopped,
+				fmt.Sprintf("Stopping %s", unit.Name()),
+			)
+
 			if err := unit.Stop(); err != nil {
 				fmt.Printf("failed to stop unit %s: %v\n", unit.Name(), err)
 			}
 		}
 
+		// Notify about waiting period
+		t.sendEvent(
+			opts.EventSink,
+			EventInfo,
+			"Waiting for containers to terminate...",
+		)
+
 		// Wait a bit longer for containers to fully terminate before network cleanup
 		time.Sleep(2 * time.Second)
+
+		t.sendEvent(
+			opts.EventSink,
+			EventInfo,
+			"Removing network...",
+		)
 
 		if err := ForceCleanupNetwork(ctx, net); err != nil {
 			fmt.Printf("failed to cleanup network %s: %v\n", net.Name, err)

@@ -182,6 +182,43 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 			return p.renderer.RenderTestRetrying(testInfo, testEvent.RetryCount, testEvent.MaxRetries)
 		}
 
+	case EventNetworkCreated:
+		// Show brief transition when network is being set up
+		p.renderer.RenderTransition("Setting up network...")
+
+	case EventScriptExecuting:
+		if baseEvent, ok := event.(*BaseEvent); ok {
+			msg := baseEvent.Message()
+			if msg == "" {
+				msg = "Running setup script..."
+			}
+			p.renderer.RenderTransition(msg)
+		}
+
+	case EventContainerPulling:
+		if unitEvent, ok := event.(*UnitEvent); ok {
+			p.renderer.RenderTransition(fmt.Sprintf("Pulling %s image...", unitEvent.UnitName))
+		}
+
+	case EventContainerStopped:
+		// BaseEvent is sent as value, not pointer
+		if baseEvent, ok := event.(BaseEvent); ok {
+			msg := baseEvent.Message()
+			if msg == "" {
+				msg = "Stopping container..."
+			}
+			p.renderer.RenderTransition(msg)
+		}
+
+	case EventInfo:
+		// BaseEvent is sent as value, not pointer
+		if baseEvent, ok := event.(BaseEvent); ok {
+			msg := baseEvent.Message()
+			if msg != "" {
+				p.renderer.RenderTransition(msg)
+			}
+		}
+
 	case EventSuiteSkipped:
 		// Handle skipped suites if needed
 		// For now, we'll track this in the secretary and show in summary

@@ -24,6 +24,13 @@ type ModernRenderer struct {
 	// State for in-place updates
 	lastLineLength int
 	currentTest    string
+
+	// Spinner for progress indication
+	spinner        *Spinner
+	spinnerActive  bool
+	spinnerTicker  *time.Ticker
+	spinnerStop    chan struct{}
+	spinnerStopped chan struct{}
 }
 
 // NewModernRenderer creates a new modern renderer
@@ -49,6 +56,7 @@ func NewModernRenderer(config RendererConfig) *ModernRenderer {
 		debug:   config.Debug,
 		isTTY:   isTTY,
 		tracker: NewProgressTracker(),
+		spinner: NewDefaultSpinner(),
 	}
 }
 
@@ -61,6 +69,11 @@ func (r *ModernRenderer) GetTracker() *ProgressTracker {
 func (r *ModernRenderer) RenderSuiteStart(suite SuiteInfo) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Stop any active spinner from previous suite
+	if r.spinnerActive {
+		r.stopSpinnerLocked()
+	}
 
 	r.tracker.StartSuite(suite.Name)
 
@@ -84,16 +97,27 @@ func (r *ModernRenderer) RenderContainerStarting(container ContainerInfo) error 
 	// Track start time
 	r.tracker.StartContainer(container)
 
-	// Only show in verbose mode
-	if r.mode != RenderModeVerbose {
+	// Only show in verbose mode or with spinner in normal mode
+	if r.mode == RenderModeCI {
 		return nil
 	}
 
 	c := r.colors
-	line := fmt.Sprintf("  %s⚙  %s container starting...%s\n",
-		c.Dim+c.Yellow, container.Name, c.Reset)
 
-	return r.write(line)
+	if r.mode == RenderModeVerbose {
+		// Verbose mode: show static line
+		line := fmt.Sprintf("  %s⚙  %s container starting...%s\n",
+			c.Dim+c.Yellow, container.Name, c.Reset)
+		return r.write(line)
+	}
+
+	// Normal mode with TTY: start spinner (spinner replaces the ⚙ symbol)
+	if r.isTTY {
+		r.startSpinner(fmt.Sprintf("  %s%%s  %s container starting...%s",
+			c.Dim+c.Yellow, container.Name, c.Reset))
+	}
+
+	return nil
 }
 
 // RenderContainerReady renders when a container is ready
@@ -105,6 +129,11 @@ func (r *ModernRenderer) RenderContainerReady(container ContainerInfo) error {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Stop spinner if active
+	if r.spinnerActive {
+		r.stopSpinnerLocked()
+	}
 
 	// Let tracker calculate duration from start time
 	r.tracker.ReadyContainer(container)
@@ -175,10 +204,10 @@ func (r *ModernRenderer) RenderTestStarted(test TestInfo) error {
 	c := r.colors
 	var line string
 	if r.isTTY && r.mode == RenderModeNormal {
-		// TTY normal mode: show in-place updating line
-		line = fmt.Sprintf("  %s⋯%s  %s...",
-			c.Dim+c.Gray, c.Reset, test.Name)
-		r.lastLineLength = len(line)
+		// TTY normal mode: start spinner (spinner replaces the ⋯ symbol)
+		r.startSpinner(fmt.Sprintf("  %s%%s  %s...%s",
+			c.Dim+c.Gray, test.Name, c.Reset))
+		return nil
 	} else if r.mode == RenderModeVerbose {
 		// Verbose mode: show with newline
 		line = fmt.Sprintf("  ▶  %s...\n", test.Name)
@@ -201,25 +230,22 @@ func (r *ModernRenderer) RenderTestRetrying(test TestInfo, attempt, maxAttempts 
 	// In verbose mode, show each retry on its own line
 	if r.mode == RenderModeVerbose {
 		c := r.colors
-		line := fmt.Sprintf("  %s⟳%s  %s attempt %d/%d...\n",
+		line := fmt.Sprintf("  %s⟳%s  %s (retry %d/%d)...\n",
 			c.Dim+c.Yellow, c.Reset, test.Name, attempt, maxAttempts)
 		return r.write(line)
 	}
 
-	// In normal mode with TTY, update the same line in place
+	// In normal mode with TTY, update spinner with retry info
 	if r.isTTY && r.mode == RenderModeNormal {
 		c := r.colors
-		line := fmt.Sprintf("  %s⟳%s  %s (attempt %d/%d)...",
-			c.Dim+c.Yellow, c.Reset, test.Name, attempt, maxAttempts)
-
-		// Clear previous line and write new one
-		if r.lastLineLength > 0 {
-			if err := r.clearLine(); err != nil {
-				return err
-			}
+		// Stop current spinner and start new one with retry info
+		if r.spinnerActive {
+			r.stopSpinnerLocked()
 		}
-		r.lastLineLength = len(line)
-		return r.write(line)
+		// Spinner replaces the ⟳ symbol
+		r.startSpinner(fmt.Sprintf("  %s%%s  %s (retry %d/%d)...%s",
+			c.Dim+c.Yellow, test.Name, attempt, maxAttempts, c.Reset))
+		return nil
 	}
 
 	// In non-TTY normal mode, don't show retries (we'll show final result with retry count)
@@ -235,6 +261,11 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 	test.RetryCount = r.tracker.GetTestRetryCount(test.SuiteName, test.Name)
 
 	r.tracker.CompleteTest(test)
+
+	// Stop spinner if active
+	if r.spinnerActive {
+		r.stopSpinnerLocked()
+	}
 
 	// Clear any in-progress line in TTY mode
 	if r.isTTY && r.lastLineLength > 0 {
@@ -301,12 +332,52 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 	return r.write(line)
 }
 
+// RenderTransition renders an ephemeral transition state with a spinner
+func (r *ModernRenderer) RenderTransition(message string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	c := r.colors
+
+	// In verbose mode or CI mode, show as static text line
+	if r.mode == RenderModeVerbose || r.mode == RenderModeCI {
+		line := fmt.Sprintf("  %s⋯%s  %s\n",
+			c.Dim+c.Gray, c.Reset, message)
+		return r.write(line)
+	}
+
+	// Normal mode with TTY: show with animated spinner
+	if r.isTTY {
+		// Stop any existing spinner first
+		if r.spinnerActive {
+			r.stopSpinnerLocked()
+		}
+
+		// Start spinner with transition message (dimmed since it's ephemeral)
+		r.startSpinner(fmt.Sprintf("  %s%%s  %s%s",
+			c.Dim+c.Gray, message, c.Reset))
+
+		return nil
+	}
+
+	// Normal mode without TTY: show as visible persistent text
+	// Use lighter gray text to indicate it's informational but keep it readable
+	line := fmt.Sprintf("  %s⋯  %s%s\n",
+		c.Gray, message, c.Reset)
+	return r.write(line)
+}
+
 // RenderSummary renders the final summary
 func (r *ModernRenderer) RenderSummary(summary Summary) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	c := r.colors
+
+	// Stop any active spinner first
+	if r.spinnerActive {
+		r.stopSpinnerLocked()
+	}
 
 	// Clear any in-progress lines
 	if r.isTTY && r.currentTest != "" {
@@ -450,6 +521,11 @@ func (r *ModernRenderer) Flush() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Stop spinner if active
+	if r.spinnerActive {
+		r.stopSpinnerLocked()
+	}
+
 	if r.isTTY && r.currentTest != "" {
 		if err := r.clearLine(); err != nil {
 			return err
@@ -479,6 +555,96 @@ func (r *ModernRenderer) clearLine() error {
 	// Move cursor to beginning of line and clear it
 	_, err := r.writer.Write([]byte("\r\033[K"))
 	return err
+}
+
+// startSpinner starts the spinner with the given format string (must contain %s for spinner frame)
+func (r *ModernRenderer) startSpinner(format string) {
+	if !r.isTTY {
+		return
+	}
+
+	// Stop any existing spinner
+	if r.spinnerActive {
+		r.stopSpinnerLocked()
+	}
+
+	r.spinnerActive = true
+	r.spinner.Reset()
+	r.spinner.Start()
+	r.spinnerTicker = time.NewTicker(80 * time.Millisecond)
+	r.spinnerStop = make(chan struct{})
+	r.spinnerStopped = make(chan struct{})
+
+	// Capture channels before starting goroutine to avoid race
+	stopCh := r.spinnerStop
+	stoppedCh := r.spinnerStopped
+	ticker := r.spinnerTicker
+
+	go r.animateSpinner(format, ticker, stopCh, stoppedCh)
+}
+
+// stopSpinnerLocked stops the spinner (caller must hold lock)
+func (r *ModernRenderer) stopSpinnerLocked() {
+	if !r.spinnerActive {
+		return
+	}
+
+	r.spinnerActive = false
+	r.spinner.Stop()
+	if r.spinnerTicker != nil {
+		r.spinnerTicker.Stop()
+		r.spinnerTicker = nil
+	}
+
+	// Signal the goroutine to stop
+	if r.spinnerStop != nil {
+		close(r.spinnerStop)
+		r.spinnerStop = nil
+		// Wait for goroutine to finish (with timeout)
+		select {
+		case <-r.spinnerStopped:
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+
+	// Clear the spinner line
+	r.clearLine()
+}
+
+// animateSpinner runs the spinner animation loop
+func (r *ModernRenderer) animateSpinner(format string, ticker *time.Ticker, stopCh, stoppedCh chan struct{}) {
+	defer func() {
+		if stoppedCh != nil {
+			close(stoppedCh)
+		}
+	}()
+
+	if ticker == nil || stopCh == nil {
+		return
+	}
+
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			r.mu.Lock()
+			if !r.spinnerActive {
+				r.mu.Unlock()
+				return
+			}
+
+			// Get current frame and format the line
+			frame := r.spinner.Frame()
+			line := fmt.Sprintf(format, frame)
+
+			// Clear and rewrite line
+			r.clearLine()
+			r.write(line)
+			r.lastLineLength = len(line)
+			r.mu.Unlock()
+		}
+	}
 }
 
 // formatDuration formats a duration in a human-readable way

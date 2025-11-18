@@ -37,6 +37,10 @@ type Renderer interface {
 	// RenderTestCompleted renders when a test completes
 	RenderTestCompleted(test TestInfo) error
 
+	// RenderTransition renders an ephemeral transition state (e.g., "Preparing retry...", "Cleaning up...")
+	// This is shown with a spinner in TTY mode and is replaced by the next real event
+	RenderTransition(message string) error
+
 	// RenderSummary renders the final summary
 	RenderSummary(summary Summary) error
 
