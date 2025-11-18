@@ -73,11 +73,13 @@ type TestInfo struct {
 
 // Summary contains the final test run summary
 type Summary struct {
-	TotalDuration time.Duration
-	TotalTests    int
-	PassedTests   []TestInfo
-	FailedTests   []TestInfo
-	SkippedTests  int
+	TotalDuration     time.Duration
+	TotalTests        int
+	PassedTests       []TestInfo
+	FailedTests       []TestInfo
+	SkippedTests      int
+	ContainerTime     time.Duration // Time spent starting containers
+	TestExecutionTime time.Duration // Time spent executing tests
 }
 
 // RendererConfig contains configuration for the renderer

@@ -52,6 +52,11 @@ func NewModernRenderer(config RendererConfig) *ModernRenderer {
 	}
 }
 
+// GetTracker returns the progress tracker for accessing timing data
+func (r *ModernRenderer) GetTracker() *ProgressTracker {
+	return r.tracker
+}
+
 // RenderSuiteStart renders when a suite starts
 func (r *ModernRenderer) RenderSuiteStart(suite SuiteInfo) error {
 	r.mu.Lock()
@@ -73,15 +78,16 @@ func (r *ModernRenderer) RenderSuiteStart(suite SuiteInfo) error {
 
 // RenderContainerStarting renders when a container is starting
 func (r *ModernRenderer) RenderContainerStarting(container ContainerInfo) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Track start time
+	r.tracker.StartContainer(container)
+
 	// Only show in verbose mode
 	if r.mode != RenderModeVerbose {
 		return nil
 	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.tracker.StartContainer(container)
 
 	c := r.colors
 	line := fmt.Sprintf("  %s⚙  %s container starting...%s\n",
@@ -100,10 +106,17 @@ func (r *ModernRenderer) RenderContainerReady(container ContainerInfo) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Let tracker calculate duration from start time
 	r.tracker.ReadyContainer(container)
 
+	// Get the container info with calculated duration from tracker
 	c := r.colors
-	timeStr := formatDuration(container.Duration)
+	var duration time.Duration
+	if ready := r.tracker.GetContainerReady(container.Name); ready != nil {
+		duration = ready.Duration
+	}
+
+	timeStr := formatDuration(duration)
 	endpoint := ""
 	if container.Endpoint != "" {
 		endpoint = fmt.Sprintf(" (%s%s%s)", c.Cyan, container.Endpoint, c.Gray)
@@ -123,9 +136,16 @@ func (r *ModernRenderer) renderContainerReadyCI(container ContainerInfo) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Let tracker calculate duration from start time
 	r.tracker.ReadyContainer(container)
 
-	timeStr := formatDuration(container.Duration)
+	// Get the container info with calculated duration from tracker
+	var duration time.Duration
+	if ready := r.tracker.GetContainerReady(container.Name); ready != nil {
+		duration = ready.Duration
+	}
+
+	timeStr := formatDuration(duration)
 	endpoint := ""
 	if container.Endpoint != "" {
 		endpoint = fmt.Sprintf(" (%s)", container.Endpoint)
@@ -175,6 +195,9 @@ func (r *ModernRenderer) RenderTestRetrying(test TestInfo, attempt, maxAttempts 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Track the retry count for this test
+	r.tracker.TrackTestRetry(test.SuiteName, test.Name, attempt)
+
 	// In verbose mode, show each retry on its own line
 	if r.mode == RenderModeVerbose {
 		c := r.colors
@@ -207,6 +230,9 @@ func (r *ModernRenderer) RenderTestRetrying(test TestInfo, attempt, maxAttempts 
 func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Get retry count from tracker before completing
+	test.RetryCount = r.tracker.GetTestRetryCount(test.SuiteName, test.Name)
 
 	r.tracker.CompleteTest(test)
 
@@ -243,8 +269,8 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 	// Failed test - always show
 	retryInfo := ""
 	if test.RetryCount > 0 {
-		retryInfo = fmt.Sprintf(" %s(failed after %d attempts, %s total)%s",
-			c.Dim+c.Yellow, test.RetryCount+1, timeStr, c.Reset)
+		retryInfo = fmt.Sprintf(" %s(failed after %d retries)%s",
+			c.Dim+c.Yellow, test.RetryCount, c.Reset)
 	} else {
 		retryInfo = fmt.Sprintf(" %s(%s)%s",
 			c.Dim+c.Gray, timeStr, c.Reset)
@@ -296,13 +322,28 @@ func (r *ModernRenderer) RenderSummary(summary Summary) error {
 	sb.WriteString(fmt.Sprintf("\n%s%s", c.Dim+c.Gray, strings.Repeat("═", 76)))
 	sb.WriteString(fmt.Sprintf("%s\n", c.Reset))
 
-	// Summary header
+	// Summary header with time breakdown
 	totalTimeStr := formatDuration(summary.TotalDuration)
 	sb.WriteString(fmt.Sprintf("%s%sSUMMARY%s", c.Bold, c.White, c.Reset))
 	sb.WriteString(fmt.Sprintf("%s%s%s\n",
 		strings.Repeat(" ", 76-7-len(totalTimeStr)),
 		c.Dim+c.Cyan, totalTimeStr))
 	sb.WriteString(c.Reset)
+
+	// Show time breakdown in verbose mode
+	if r.mode == RenderModeVerbose && (summary.ContainerTime > 0 || summary.TestExecutionTime > 0) {
+		containerTimeStr := formatDuration(summary.ContainerTime)
+		testTimeStr := formatDuration(summary.TestExecutionTime)
+		overhead := summary.TotalDuration - summary.ContainerTime - summary.TestExecutionTime
+		overheadStr := formatDuration(overhead)
+
+		sb.WriteString(fmt.Sprintf("%s  Setup: %s  |  Tests: %s  |  Overhead: %s%s\n",
+			c.Dim+c.Gray, containerTimeStr, testTimeStr, overheadStr, c.Reset))
+
+		// Explain what overhead includes
+		sb.WriteString(fmt.Sprintf("%s  (Overhead: Docker networks, framework initialization, cleanup)%s\n",
+			c.Dim+c.Gray, c.Reset))
+	}
 	sb.WriteString("\n")
 
 	// Test counts

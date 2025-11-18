@@ -135,7 +135,7 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 				Name:     unitEvent.UnitName,
 				Kind:     string(unitEvent.UnitKind),
 				Endpoint: unitEvent.Endpoint,
-				Duration: time.Since(unitEvent.Timestamp()),
+				Duration: 0, // Will be calculated by renderer's tracker
 			}
 			return p.renderer.RenderContainerReady(containerInfo)
 		}
@@ -243,12 +243,29 @@ func (p *StdoutHumanOutputProcessor) Flush() error {
 		}
 	}
 
+	// Get timing information from renderer's tracker
+	var containerTime, testTime time.Duration
+	if renderer, ok := p.renderer.(*ui.ModernRenderer); ok {
+		tracker := renderer.GetTracker()
+		containerTime = tracker.GetTotalContainerTime()
+
+		// Calculate total test execution time
+		for _, test := range passedInfos {
+			testTime += test.Duration
+		}
+		for _, test := range failedInfos {
+			testTime += test.Duration
+		}
+	}
+
 	summary := ui.Summary{
-		TotalDuration: time.Since(p.testsSecretary.StartTime()),
-		TotalTests:    len(p.testsSecretary.CompletedTests()),
-		PassedTests:   passedInfos,
-		FailedTests:   failedInfos,
-		SkippedTests:  len(skippedTests),
+		TotalDuration:     time.Since(p.testsSecretary.StartTime()),
+		TotalTests:        len(p.testsSecretary.CompletedTests()),
+		PassedTests:       passedInfos,
+		FailedTests:       failedInfos,
+		SkippedTests:      len(skippedTests),
+		ContainerTime:     containerTime,
+		TestExecutionTime: testTime,
 	}
 
 	return p.renderer.RenderSummary(summary)

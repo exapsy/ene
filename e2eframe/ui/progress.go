@@ -20,10 +20,12 @@ type ProgressTracker struct {
 	testsCompleted []TestInfo
 	testsFailed    []TestInfo
 	testsPassed    []TestInfo
+	testRetryCount map[string]int // Track retry attempts per test
 
 	// Container tracking
 	containersStarting map[string]*ContainerInfo
 	containersReady    map[string]*ContainerInfo
+	containerStartTime map[string]time.Time
 
 	// Timing
 	startTime time.Time
@@ -37,8 +39,10 @@ func NewProgressTracker() *ProgressTracker {
 		testsCompleted:     make([]TestInfo, 0),
 		testsFailed:        make([]TestInfo, 0),
 		testsPassed:        make([]TestInfo, 0),
+		testRetryCount:     make(map[string]int),
 		containersStarting: make(map[string]*ContainerInfo),
 		containersReady:    make(map[string]*ContainerInfo),
+		containerStartTime: make(map[string]time.Time),
 		startTime:          time.Now(),
 	}
 }
@@ -77,14 +81,59 @@ func (p *ProgressTracker) StartContainer(info ContainerInfo) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.containersStarting[info.Name] = &info
+	p.containerStartTime[info.Name] = time.Now()
 }
 
-// ReadyContainer marks a container as ready
+// ReadyContainer marks a container as ready and calculates duration
 func (p *ProgressTracker) ReadyContainer(info ContainerInfo) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	// Calculate actual duration from start time if available
+	if startTime, exists := p.containerStartTime[info.Name]; exists {
+		info.Duration = time.Since(startTime)
+		delete(p.containerStartTime, info.Name)
+	}
+
 	delete(p.containersStarting, info.Name)
 	p.containersReady[info.Name] = &info
+}
+
+// GetContainerReady returns the container info with calculated duration
+func (p *ProgressTracker) GetContainerReady(name string) *ContainerInfo {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.containersReady[name]
+}
+
+// TrackTestRetry records a retry attempt for a test
+func (p *ProgressTracker) TrackTestRetry(suiteName, testName string, retryCount int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	key := suiteName + "::" + testName
+	p.testRetryCount[key] = retryCount
+}
+
+// GetTestRetryCount returns the retry count for a test
+func (p *ProgressTracker) GetTestRetryCount(suiteName, testName string) int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	key := suiteName + "::" + testName
+	return p.testRetryCount[key]
+}
+
+// GetTotalContainerTime returns the total time spent starting containers
+func (p *ProgressTracker) GetTotalContainerTime() time.Duration {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	var total time.Duration
+	for _, container := range p.containersReady {
+		if container != nil {
+			total += container.Duration
+		}
+	}
+	return total
 }
 
 // StartTest marks a test as running
@@ -103,6 +152,9 @@ func (p *ProgressTracker) CompleteTest(info TestInfo) {
 	key := info.SuiteName + "::" + info.Name
 	delete(p.testsRunning, key)
 
+	// Set retry count from tracked value
+	info.RetryCount = p.testRetryCount[key]
+
 	p.testsCompleted = append(p.testsCompleted, info)
 
 	if info.Passed {
@@ -110,6 +162,9 @@ func (p *ProgressTracker) CompleteTest(info TestInfo) {
 	} else {
 		p.testsFailed = append(p.testsFailed, info)
 	}
+
+	// Clean up retry count
+	delete(p.testRetryCount, key)
 }
 
 // GetRunningTests returns all currently running tests
@@ -163,11 +218,19 @@ func (p *ProgressTracker) GetSummary(skippedCount int) Summary {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
+	// Calculate total test execution time
+	var testTime time.Duration
+	for _, test := range p.testsCompleted {
+		testTime += test.Duration
+	}
+
 	return Summary{
-		TotalDuration: time.Since(p.startTime),
-		TotalTests:    len(p.testsCompleted),
-		PassedTests:   p.testsPassed,
-		FailedTests:   p.testsFailed,
-		SkippedTests:  skippedCount,
+		TotalDuration:     time.Since(p.startTime),
+		TotalTests:        len(p.testsCompleted),
+		PassedTests:       p.testsPassed,
+		FailedTests:       p.testsFailed,
+		SkippedTests:      skippedCount,
+		ContainerTime:     p.GetTotalContainerTime(),
+		TestExecutionTime: testTime,
 	}
 }
