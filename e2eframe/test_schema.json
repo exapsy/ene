@@ -13,17 +13,29 @@
       "type": "array",
       "items": {
         "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1
-          },
-          "value": {
-            "type": "string"
-          }
-        },
-        "required": ["name", "value"],
-        "additionalProperties": false
+        "description": "A fixture can be a simple key-value pair (e.g., userid: 5432) or a complex object with a file field",
+        "minProperties": 1,
+        "maxProperties": 1,
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": ["string", "number", "boolean"],
+              "description": "Simple primitive value"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "description": "Path to file containing the fixture value"
+                }
+              },
+              "required": ["file"],
+              "additionalProperties": false,
+              "description": "Complex fixture with file reference"
+            }
+          ]
+        }
       }
     },
     "units": {
