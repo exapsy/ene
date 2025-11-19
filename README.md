@@ -7,7 +7,7 @@
 
 ENE is a powerful Docker-based end-to-end testing framework that spins up complete test environments with databases, services, and mocked APIs to validate your applications through comprehensive integration tests.
 
-![Demo](./e2eframe/assets/demo.gif)
+![Demo](./e2eframe/docs/assets/demo.gif)
 
 ## 🌟 Key Features
 
