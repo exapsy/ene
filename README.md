@@ -1,4 +1,4 @@
-<img src="./e2eframe/assets/logo.svg" alt="ENE Logo" width="100">
+<img src="./e2eframe/logo.svg" alt="ENE Logo" width="100">
 
 # ENE - End-to-End Testing Framework
 
@@ -7,7 +7,7 @@
 
 ENE is a powerful Docker-based end-to-end testing framework that spins up complete test environments with databases, services, and mocked APIs to validate your applications through comprehensive integration tests.
 
-![Demo](./e2eframe/docs/assets/demo.gif)
+![Demo](./e2eframe/docs/assets/demo.mp4)
 
 ## 🌟 Key Features
 
