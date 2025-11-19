@@ -37,6 +37,10 @@ type ModernRenderer struct {
 	spinnerTicker  *time.Ticker
 	spinnerStop    chan struct{}
 	spinnerStopped chan struct{}
+
+	// Track consecutive passing tests for summary display
+	consecutivePassedTests int
+	lastPassedTestCount    int
 }
 
 // NewModernRenderer creates a new modern renderer
@@ -84,6 +88,10 @@ func (r *ModernRenderer) RenderSuiteStart(suite SuiteInfo) error {
 		r.stopSpinnerLocked()
 	}
 
+	// Reset consecutive passed tests counter for new suite
+	r.consecutivePassedTests = 0
+	r.lastPassedTestCount = 0
+
 	r.tracker.StartSuite(suite.Name)
 
 	c := r.colors
@@ -118,6 +126,20 @@ func (r *ModernRenderer) RenderSuiteFinished(suite SuiteFinishedInfo) error {
 		r.stopSpinnerLocked()
 	}
 
+	// Show summary of any remaining passed tests in non-verbose mode
+	if r.mode == RenderModeNormal && r.consecutivePassedTests > 0 {
+		c := r.colors
+		summaryLine := fmt.Sprintf("  %s✓%s  %d tests passed\n",
+			c.Green, c.Reset,
+			r.consecutivePassedTests)
+		if err := r.write(summaryLine); err != nil {
+			return err
+		}
+		r.linesAfterHeader++
+		r.consecutivePassedTests = 0
+	}
+
+	r.tracker.CompleteSuite(suite.Name)
 	c := r.colors
 
 	// Calculate overhead
@@ -373,8 +395,9 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 	timeStr := formatDuration(test.Duration)
 
 	if test.Passed {
-		// In non-verbose mode, don't show passing tests
+		// In non-verbose mode, track consecutive passing tests
 		if r.mode == RenderModeNormal {
+			r.consecutivePassedTests++
 			// Clear any retry line that might be showing
 			if r.isTTY {
 				return nil
@@ -389,6 +412,18 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 			c.Dim+c.Gray, timeStr, c.Reset)
 		r.linesAfterHeader++
 		return r.write(line)
+	}
+
+	// Test failed - show summary of passed tests if any
+	if r.mode == RenderModeNormal && r.consecutivePassedTests > 0 {
+		summaryLine := fmt.Sprintf("  %s✓%s  %d tests passed\n",
+			c.Green, c.Reset,
+			r.consecutivePassedTests)
+		if err := r.write(summaryLine); err != nil {
+			return err
+		}
+		r.linesAfterHeader++
+		r.consecutivePassedTests = 0
 	}
 
 	// Failed test - always show

@@ -32,6 +32,7 @@ type Response struct {
 	Status  int               `yaml:"status"`
 	Body    any               `yaml:"body"`
 	Headers map[string]string `yaml:"headers"`
+	Delay   string            `yaml:"delay"`
 }
 
 func init() {
@@ -76,7 +77,7 @@ func UnmarshallUnit(node *yaml.Node) (e2eframe.Unit, error) {
 
 			var routes []Route
 
-			for j := 0; j < len(value.Content); j += 2 {
+			for j := 0; j < len(value.Content); j++ {
 				routeValue := value.Content[j]
 
 				var route Route
@@ -115,10 +116,26 @@ func (u *Unit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) error
 			routeMethodHandler[interpolatedPath] = map[string]func(http.ResponseWriter, *http.Request){}
 		}
 
+		// Capture route response in closure to avoid referencing loop variable
+		responseBody := route.Response.Body
+		responseStatus := route.Response.Status
+		responseHeaders := route.Response.Headers
+		responseDelay := route.Response.Delay
+
 		routeMethodHandler[interpolatedPath][route.Method] = func(w http.ResponseWriter, r *http.Request) {
-			body := route.Response.Body
-			status := route.Response.Status
-			headers := route.Response.Headers
+			body := responseBody
+			status := responseStatus
+			headers := responseHeaders
+			delay := responseDelay
+
+			// Add delay if specified
+			if delay != "" {
+				duration, err := time.ParseDuration(delay)
+				if err == nil {
+					time.Sleep(duration)
+				}
+				// Note: Could log error, but opts.Logger not available in closure
+			}
 
 			// Set headers with fixture interpolation
 			for headerName, headerValue := range headers {
@@ -136,7 +153,9 @@ func (u *Unit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) error
 				interpolatedBody := u.interpolateFixtures(b, opts.Fixtures)
 				w.Write([]byte(interpolatedBody))
 			case map[string]interface{}:
-				bytes, err := json.Marshal(b)
+				// Interpolate fixtures in JSON object
+				interpolatedBody := u.interpolateFixturesInMap(b, opts.Fixtures)
+				bytes, err := json.Marshal(interpolatedBody)
 				if err != nil {
 					return
 				}
@@ -151,8 +170,15 @@ func (u *Unit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) error
 	for _, route := range u.Routes {
 		// Use interpolated path for route registration
 		interpolatedPath := u.interpolateFixtures(route.Path, opts.Fixtures)
-		mux.HandleFunc(interpolatedPath, func(w http.ResponseWriter, r *http.Request) {
-			routeMethodHandler[interpolatedPath][r.Method](w, r)
+		// Capture interpolatedPath in closure to avoid referencing loop variable
+		path := interpolatedPath
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			handler := routeMethodHandler[path][r.Method]
+			if handler == nil {
+				http.NotFound(w, r)
+				return
+			}
+			handler(w, r)
 		})
 	}
 
@@ -231,6 +257,28 @@ func (u *Unit) interpolateFixtures(str string, fixtures []e2eframe.Fixture) stri
 	}
 
 	return str
+}
+
+// interpolateFixturesInMap recursively interpolates fixtures in maps and slices
+func (u *Unit) interpolateFixturesInMap(data interface{}, fixtures []e2eframe.Fixture) interface{} {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		result := make(map[string]interface{})
+		for key, value := range v {
+			result[key] = u.interpolateFixturesInMap(value, fixtures)
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(v))
+		for i, value := range v {
+			result[i] = u.interpolateFixturesInMap(value, fixtures)
+		}
+		return result
+	case string:
+		return u.interpolateFixtures(v, fixtures)
+	default:
+		return v
+	}
 }
 
 func (u *Unit) sendEvent(sink e2eframe.EventSink, eventType e2eframe.EventType, message string) {

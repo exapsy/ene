@@ -99,6 +99,11 @@
                       "additionalProperties": {
                         "type": "string"
                       }
+                    },
+                    "delay": {
+                      "type": "string",
+                      "description": "Delay before responding (e.g., '2s', '500ms'). Simulates slow endpoints.",
+                      "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)$"
                     }
                   }
                 }
@@ -188,6 +193,10 @@
                 "const": "minio"
               }
             ]
+          },
+          "target": {
+            "type": "string",
+            "description": "Override suite-level target. Specifies which unit to send requests to for this test."
           },
           "timeout": {
             "type": "string"
@@ -495,17 +504,35 @@
                 "additionalProperties": {
                   "oneOf": [
                     {
-                      "type": "string",
+                      "type": [
+                        "string",
+                        "number",
+                        "integer",
+                        "boolean",
+                        "null"
+                      ],
                       "description": "Shorthand for equals assertion"
                     },
                     {
                       "type": "object",
                       "properties": {
                         "equals": {
-                          "type": "string"
+                          "type": [
+                            "string",
+                            "number",
+                            "integer",
+                            "boolean",
+                            "null"
+                          ]
                         },
                         "not_equals": {
-                          "type": "string"
+                          "type": [
+                            "string",
+                            "number",
+                            "integer",
+                            "boolean",
+                            "null"
+                          ]
                         },
                         "contains": {
                           "type": "string"
@@ -554,6 +581,21 @@
                             "array",
                             "object"
                           ]
+                        },
+                        "contains_where": {
+                          "type": "object",
+                          "description": "Check if array contains at least one item matching all conditions",
+                          "additionalProperties": true
+                        },
+                        "all_match": {
+                          "type": "object",
+                          "description": "Check if all array items match conditions",
+                          "additionalProperties": true
+                        },
+                        "none_match": {
+                          "type": "object",
+                          "description": "Check if no array items match conditions",
+                          "additionalProperties": true
                         }
                       },
                       "additionalProperties": false
@@ -567,17 +609,35 @@
                 "additionalProperties": {
                   "oneOf": [
                     {
-                      "type": "string",
+                      "type": [
+                        "string",
+                        "number",
+                        "integer",
+                        "boolean",
+                        "null"
+                      ],
                       "description": "Shorthand for equals assertion"
                     },
                     {
                       "type": "object",
                       "properties": {
                         "equals": {
-                          "type": "string"
+                          "type": [
+                            "string",
+                            "number",
+                            "integer",
+                            "boolean",
+                            "null"
+                          ]
                         },
                         "not_equals": {
-                          "type": "string"
+                          "type": [
+                            "string",
+                            "number",
+                            "integer",
+                            "boolean",
+                            "null"
+                          ]
                         },
                         "contains": {
                           "type": "string"

@@ -210,6 +210,15 @@ Mock HTTP server for testing without real services.
         body:
           id: "123"
           created: true
+    - path: /api/slow-endpoint
+      method: GET
+      response:
+        status: 200
+        delay: "5s"  # Simulates a slow endpoint
+        body:
+          message: "This took a while"
+        headers:
+          Content-Type: application/json
 ```
 
 **Fields:**
@@ -220,8 +229,15 @@ Mock HTTP server for testing without real services.
     - `status` (required): HTTP status code
     - `body` (optional): Response body (can be object or string)
     - `headers` (optional): Response headers (key-value pairs)
+    - `delay` (optional): Delay before responding (e.g., '2s', '500ms'). Simulates slow endpoints.
 
 **Supported Methods**: GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS
+
+**Delay Format**: Duration string following Go's time.ParseDuration format
+- `500ms` - 500 milliseconds
+- `2s` - 2 seconds
+- `1m30s` - 1 minute and 30 seconds
+- Use cases: Testing timeout configuration, simulating slow external services, demonstrating timeout failures
 
 ### Unit Type: `http`
 
@@ -357,13 +373,50 @@ Test definitions specify what to test and what results to expect.
 tests:
   - name: my test
     kind: http
+    target: payment-service  # Optional: override suite-level target
     timeout: 5s
 ```
 
 **Common Fields:**
 - `name` (required): Descriptive test name
 - `kind` (required): Test type (`http` or `minio`)
+- `target` (optional): Override suite-level target for this specific test
 - `timeout` (optional): Maximum test execution time (default: 5s)
+
+#### `target` (optional)
+
+Override the suite-level `target` for this specific test.
+
+**Type:** `string` (unit name)  
+**Default:** Uses suite-level `target`
+
+**Use cases:**
+- Testing external services directly (bypass gateway)
+- Multi-service architectures where some tests hit different services
+- Testing service-to-service communication
+
+**Example:**
+
+```yaml
+# Suite-level target
+target: api-gateway
+
+tests:
+  # This test uses api-gateway (default)
+  - name: test gateway endpoint
+    kind: http
+    request:
+      path: /api/users
+      
+  # This test overrides to call payment service directly
+  - name: test payment service
+    kind: http
+    target: payment-service  # Override
+    request:
+      path: /v1/charge
+```
+
+---
 
 ### Test Type: `http`
 
@@ -522,6 +575,14 @@ constraints:
 
 ## Assertions
 
+ENE provides detailed error messages when assertions fail, showing both the expected and actual values to help you quickly diagnose issues.
+
+**Example Error Messages:**
+- Header assertion: `header "Content-Type": expected "application/json" but got "text/plain"`
+- Body equals: `expected "John Doe" but got "Jane Smith"`
+- Body comparison: `expected value > 18 but got 15`
+- Body size: `expected array size 5 but got 3`
+
 ### Body Assertions
 
 Assertions on response body content using JSONPath. Uses a map-based format where keys are JSON paths and values are either strings (shorthand for equals) or objects with explicit assertions.
@@ -560,13 +621,21 @@ body_asserts:
 **Comparison Assertions:**
 - String value: Shorthand for equals assertion (e.g., `name: "John"`)
 - `equals`: Exact value match
+  - *Error format:* `expected "X" but got "Y"`
 - `not_equals`: Value must not match
+  - *Error format:* `value equals "X" (should not equal, but got: "X")`
 - `contains`: String/array must contain substring/element
+  - *Error format:* `value does not contain "X" (got: "Y")`
 - `not_contains`: Must not contain substring/element
+  - *Error format:* `value contains "X" (got: "Y")`
 - `matches`: Regex pattern match
+  - *Error format:* `value does not match regex "pattern" (got: "Y")`
 - `not_matches`: Must not match regex pattern
+  - *Error format:* `value matches regex "pattern" (should not match, but got: "Y")`
 - `>`: Numeric comparison (value > threshold)
+  - *Error format:* `expected value > X but got Y`
 - `<`: Numeric comparison (value < threshold)
+  - *Error format:* `expected value < X but got Y`
 - `greater_than`: Alias for `>`
 - `less_than`: Alias for `<`
 
@@ -575,12 +644,19 @@ body_asserts:
 
 **Type Assertion:**
 - `type`: Expected type (`string`, `int`, `float`, `bool`, `array`, `object`)
+  - *Error format:* `expected type 'string' but got type 'number' at path: user.age (value: "25")`
 
 **Size/Length Assertion:**
 - `length`: Expected length for strings/arrays or key count for objects
+  - *Error format:* `expected size X but got Y` or `expected array size X but got Y`
 - `size`: Alias for `length`
 
-**Note:** Some assertions conflict (e.g., `equals` with `contains`, `>`, `<`). Compatible combinations include `>` and `<` for range checks, `present` with any other assertion, and `type` with any other assertion.
+**Array Containment Assertions:**
+- `contains_where`: Check if array contains at least one item matching all conditions
+- `all_match`: Check if all array items match conditions
+- `none_match`: Check if no array items match conditions
+
+**Note:** Some assertions conflict (e.g., `equals` with `contains`, `>`, `<`). Compatible combinations include `>` and `<` for range checks, `present` with any other assertion, and `type` with any other assertion. Array containment assertions can be combined with `type` and `length` checks.
 
 #### JSONPath Examples
 
@@ -608,6 +684,25 @@ body_asserts:
   score:
     ">": 0
     "<": 100
+  
+  # Array containment - check if array contains item matching conditions
+  products:
+    contains_where:
+      name: "iPhone"
+      price:
+        ">": 900
+  
+  # All items must match conditions
+  items:
+    all_match:
+      in_stock: true
+      price:
+        ">": 0
+  
+  # No items should match conditions
+  errors:
+    none_match:
+      severity: "critical"
 ```
 
 ### Header Assertions
@@ -641,11 +736,17 @@ header_asserts:
 **Comparison Assertions:**
 - String value: Shorthand for equals assertion (e.g., `Content-Type: application/json`)
 - `equals`: Exact value match
+  - *Error format:* `header "Content-Type": expected "application/json" but got "text/plain"`
 - `not_equals`: Value must not match
+  - *Error format:* `header "X-Custom" equals "value" (should not equal, but got: "value")`
 - `contains`: Header value must contain substring
+  - *Error format:* `header "Cache-Control" does not contain "no-cache" (got: "public, max-age=3600")`
 - `not_contains`: Must not contain substring
+  - *Error format:* `header "Set-Cookie" contains "secure=false" (got: "session=abc; secure=false")`
 - `matches`: Regex pattern match
+  - *Error format:* `header "X-Request-ID" does not match pattern "^[0-9a-f-]+$" (got: "invalid_id")`
 - `not_matches`: Must not match regex pattern
+  - *Error format:* `header "X-Token" matches pattern "^Bearer" (should not match, but got: "Bearer token123")`
 
 **Presence Assertion:**
 - `present`: Boolean - header must exist (true) or not exist (false)
@@ -860,6 +961,10 @@ tests:
           present: true
           type: string
         created: true
+        # Check if tags array contains specific value
+        tags:
+          contains_where:
+            name: "new"
       header_asserts:
         Location:
           present: true

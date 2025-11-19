@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document summarizes the comprehensive documentation created for the ENE (End-to-End) testing framework CLI.
+This document summarizes the comprehensive documentation created for the ENE (End-to-End) testing framework CLI, including recent improvements to error messages and assertion feedback.
 
 ## What Was Done
 
@@ -142,7 +142,7 @@ docs/
 - ✅ Test types (HTTP, MinIO)
 - ✅ Fixtures and variable interpolation
 - ✅ Environment configuration
-- ✅ Assertions (body, header, state)
+- ✅ Assertions (body, header, state) with improved error messages
 - ✅ Timeouts and healthchecks
 - ✅ Migrations (MongoDB JS, PostgreSQL SQL)
 
@@ -153,9 +153,10 @@ docs/
 - ✅ Database integration
 - ✅ Object storage testing
 - ✅ Microservices architecture
-- ✅ Error handling
+- ✅ Error handling with detailed error messages
 - ✅ Complex assertions
 - ✅ Environment-specific configs
+- ✅ Understanding test failure messages
 
 ## CLI Testing Performed
 
@@ -200,6 +201,7 @@ ene completion bash ✓
 - ✅ Troubleshooting sections
 - ✅ Cross-references between documents
 - ✅ Tips and best practices
+- ✅ Detailed error message examples showing expected vs actual values
 
 ### Comprehensive Coverage
 - ✅ Installation instructions
@@ -247,6 +249,31 @@ All documentation was:
 - **Configuration options documented**: 100+
 - **Complete examples**: 15+
 - **Code snippets**: 100+
+- **Error message examples**: 10+
+
+## Recent Improvements
+
+### Enhanced Error Messages (2024)
+
+All assertion failures now show both expected and actual values for faster debugging:
+
+**Header Assertions:**
+- Before: `header "Content-Type" does not equal "application/json"`
+- After: `header "Content-Type": expected "application/json" but got "text/plain"`
+
+**Body Assertions:**
+- Before: `value does not equal: John Doe`
+- After: `expected "John Doe" but got "Jane Smith"`
+
+**Numeric Comparisons:**
+- Before: `value is not greater than: 18`
+- After: `expected value > 18 but got 15`
+
+**Type Checking:**
+- Before: `value is not a string: user.age`
+- After: `expected type 'string' but got type 'number' at path: user.age (value: "25")`
+
+This improvement significantly reduces debugging time by immediately showing what value was received versus what was expected, eliminating the need to inspect raw HTTP responses manually.
 
 ## Future Enhancements
 
@@ -263,8 +290,9 @@ Potential additions for future documentation:
 The ENE CLI is now fully documented with:
 - Comprehensive user guides
 - Complete reference materials
-- Practical examples
+- Practical examples with error message demonstrations
 - Troubleshooting resources
 - Quick reference materials
+- Improved error reporting with actual vs expected values
 
-Users can now effectively use ENE for end-to-end testing without needing to dive into the source code.
+Users can now effectively use ENE for end-to-end testing and quickly diagnose test failures without needing to dive into the source code or inspect raw HTTP responses.

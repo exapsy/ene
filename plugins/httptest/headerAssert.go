@@ -54,16 +54,32 @@ func (t TestHeaderAsserts) ToTestHeaderAssertList() ([]TestHeaderAssert, error) 
 func parseHeaderAssertValue(name string, value interface{}) (TestHeaderAssert, error) {
 	assert := TestHeaderAssert{Name: name}
 
-	// If value is a string, it's shorthand for "equals"
-	if strValue, ok := value.(string); ok {
-		assert.Equals = strValue
+	// Handle shorthand values (string, int, float, bool, null)
+	switch v := value.(type) {
+	case string:
+		assert.Equals = v
+		return assert, nil
+	case int:
+		assert.Equals = fmt.Sprintf("%d", v)
+		return assert, nil
+	case int64:
+		assert.Equals = fmt.Sprintf("%d", v)
+		return assert, nil
+	case float64:
+		assert.Equals = fmt.Sprintf("%v", v)
+		return assert, nil
+	case bool:
+		assert.Equals = fmt.Sprintf("%t", v)
+		return assert, nil
+	case nil:
+		assert.Equals = "null"
 		return assert, nil
 	}
 
 	// If value is a map, parse the assertion specs
 	mapValue, ok := value.(map[string]interface{})
 	if !ok {
-		return TestHeaderAssert{}, fmt.Errorf("assertion value must be either a string or an object, got %T", value)
+		return TestHeaderAssert{}, fmt.Errorf("assertion value must be either a string, number, boolean, null, or an object, got %T", value)
 	}
 
 	// Track which assertions are set for conflict detection
@@ -78,12 +94,40 @@ func parseHeaderAssertValue(name string, value interface{}) (TestHeaderAssert, e
 		assert.NotContains = v
 		setAssertions = append(setAssertions, "not_contains")
 	}
-	if v, ok := mapValue["equals"].(string); ok {
-		assert.Equals = v
+	// Handle equals with multiple types
+	if v, ok := mapValue["equals"]; ok {
+		switch val := v.(type) {
+		case string:
+			assert.Equals = val
+		case int, int64:
+			assert.Equals = fmt.Sprintf("%d", val)
+		case float64:
+			assert.Equals = fmt.Sprintf("%v", val)
+		case bool:
+			assert.Equals = fmt.Sprintf("%t", val)
+		case nil:
+			assert.Equals = "null"
+		default:
+			return TestHeaderAssert{}, fmt.Errorf("equals value must be a string, number, boolean, or null, got %T", v)
+		}
 		setAssertions = append(setAssertions, "equals")
 	}
-	if v, ok := mapValue["not_equals"].(string); ok {
-		assert.NotEquals = v
+	// Handle not_equals with multiple types
+	if v, ok := mapValue["not_equals"]; ok {
+		switch val := v.(type) {
+		case string:
+			assert.NotEquals = val
+		case int, int64:
+			assert.NotEquals = fmt.Sprintf("%d", val)
+		case float64:
+			assert.NotEquals = fmt.Sprintf("%v", val)
+		case bool:
+			assert.NotEquals = fmt.Sprintf("%t", val)
+		case nil:
+			assert.NotEquals = "null"
+		default:
+			return TestHeaderAssert{}, fmt.Errorf("not_equals value must be a string, number, boolean, or null, got %T", v)
+		}
 		setAssertions = append(setAssertions, "not_equals")
 	}
 	if v, ok := mapValue["matches"].(string); ok {
@@ -250,7 +294,7 @@ type TestHeaderAssertTestOptions struct {
 }
 
 func (e TestHeaderAssert) Test(resp *http.Response, opts *TestHeaderAssertTestOptions) error {
-	if e.Present != nil && *e.Present && len(resp.Header[e.Name]) == 0 {
+	if e.Present != nil && *e.Present && resp.Header.Get(e.Name) == "" {
 		return fmt.Errorf("header %q is missing", e.Name)
 	}
 
@@ -263,62 +307,68 @@ func (e TestHeaderAssert) Test(resp *http.Response, opts *TestHeaderAssertTestOp
 	notMatches := interpolateFixtureValue(e.NotMatches, opts.Fixtures)
 
 	if contains != "" {
-		if _, ok := resp.Header[e.Name]; !ok {
+		if resp.Header.Get(e.Name) == "" {
 			return fmt.Errorf("header %q not found", e.Name)
 		}
 
-		if !headerContains(resp.Header.Get(e.Name), contains) {
-			return fmt.Errorf("header %q does not contain %q", e.Name, contains)
+		actualValue := resp.Header.Get(e.Name)
+		if !headerContains(actualValue, contains) {
+			return fmt.Errorf("header %q does not contain %q (got: %q)", e.Name, contains, actualValue)
 		}
 	}
 
 	if notContains != "" {
-		if _, ok := resp.Header[e.Name]; !ok {
+		if resp.Header.Get(e.Name) == "" {
 			return fmt.Errorf("header %q not found", e.Name)
 		}
 
-		if headerContains(resp.Header.Get(e.Name), e.NotContains) {
-			return fmt.Errorf("header %q contains %q", e.Name, notContains)
+		actualValue := resp.Header.Get(e.Name)
+		if headerContains(actualValue, notContains) {
+			return fmt.Errorf("header %q contains %q (got: %q)", e.Name, notContains, actualValue)
 		}
 	}
 
 	if equals != "" {
-		if _, ok := resp.Header[e.Name]; !ok {
+		if resp.Header.Get(e.Name) == "" {
 			return fmt.Errorf("header %q not found", e.Name)
 		}
 
-		if resp.Header.Get(e.Name) != e.Equals {
-			return fmt.Errorf("header %q does not equal %q", e.Name, equals)
+		actualValue := resp.Header.Get(e.Name)
+		if actualValue != equals {
+			return fmt.Errorf("header %q: expected %q but got %q", e.Name, equals, actualValue)
 		}
 	}
 
 	if notEquals != "" {
-		if _, ok := resp.Header[e.Name]; !ok {
+		if resp.Header.Get(e.Name) == "" {
 			return fmt.Errorf("header %q not found", e.Name)
 		}
 
-		if resp.Header.Get(e.Name) == e.NotEquals {
-			return fmt.Errorf("header %q equals %q", e.Name, notEquals)
+		actualValue := resp.Header.Get(e.Name)
+		if actualValue == notEquals {
+			return fmt.Errorf("header %q equals %q (should not equal, but got: %q)", e.Name, notEquals, actualValue)
 		}
 	}
 
 	if matches != "" {
-		if _, ok := resp.Header[e.Name]; !ok {
+		if resp.Header.Get(e.Name) == "" {
 			return fmt.Errorf("header %q not found", e.Name)
 		}
 
-		if !headerMatches(resp.Header.Get(e.Name), e.Matches) {
-			return fmt.Errorf("header %q does not match %q", e.Name, matches)
+		actualValue := resp.Header.Get(e.Name)
+		if !headerMatches(actualValue, matches) {
+			return fmt.Errorf("header %q does not match pattern %q (got: %q)", e.Name, matches, actualValue)
 		}
 	}
 
 	if notMatches != "" {
-		if _, ok := resp.Header[e.Name]; !ok {
+		if resp.Header.Get(e.Name) == "" {
 			return fmt.Errorf("header %q not found", e.Name)
 		}
 
-		if headerMatches(resp.Header.Get(e.Name), e.NotMatches) {
-			return fmt.Errorf("header %q matches %q", e.Name, notMatches)
+		actualValue := resp.Header.Get(e.Name)
+		if headerMatches(actualValue, notMatches) {
+			return fmt.Errorf("header %q matches pattern %q (should not match, but got: %q)", e.Name, notMatches, actualValue)
 		}
 	}
 

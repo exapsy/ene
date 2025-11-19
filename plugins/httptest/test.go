@@ -49,6 +49,7 @@ func (e *StatusMismatchError) PrettyString(useColor bool) string {
 type TestSuiteTest struct {
 	TestName       string
 	TestKind       string
+	TestTarget     string // Optional: override suite-level target
 	Request        TestSuiteTestRequest
 	Expect         TestSuiteTestExpect
 	TargetEndpoint string
@@ -241,6 +242,10 @@ func (t *TestSuiteTest) UnmarshalYAML(node *yaml.Node) error {
 			if err := value.Decode(&t.TestKind); err != nil {
 				return err
 			}
+		case "target":
+			if err := value.Decode(&t.TestTarget); err != nil {
+				return err
+			}
 		case "request":
 			if value.Kind != yaml.MappingNode {
 				return fmt.Errorf("expected mapping node, got %v", value.Kind)
@@ -272,7 +277,26 @@ func (t *TestSuiteTest) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func (t *TestSuiteTest) Initialize(testSuite e2eframe.TestSuite) error {
-	target := testSuite.Target()
+	var target e2eframe.Unit
+
+	// Use per-test target if specified, otherwise use suite-level target
+	if t.TestTarget != "" {
+		// Find the target unit in the test suite
+		units := testSuite.Units()
+		found := false
+		for _, unit := range units {
+			if unit.Name() == t.TestTarget {
+				target = unit
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("target unit '%s' not found in suite", t.TestTarget)
+		}
+	} else {
+		target = testSuite.Target()
+	}
 
 	// Target is required
 	if target == nil {

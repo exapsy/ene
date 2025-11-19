@@ -26,6 +26,11 @@ type TestBodyAssert struct {
 	GreaterThan int
 	LessThan    int
 	Type        BodyFieldType
+
+	// Array containment assertions
+	ContainsWhere map[string]interface{}
+	AllMatch      map[string]interface{}
+	NoneMatch     map[string]interface{}
 }
 
 // TestBodyAsserts is a map where keys are JSON paths and values are assertion specs
@@ -61,16 +66,32 @@ func (t TestBodyAsserts) ToTestBodyAssertList() ([]TestBodyAssert, error) {
 func parseBodyAssertValue(path string, value interface{}) (TestBodyAssert, error) {
 	assert := TestBodyAssert{Path: path}
 
-	// If value is a string, it's shorthand for "equals"
-	if strValue, ok := value.(string); ok {
-		assert.Equals = strValue
+	// Handle shorthand values (string, int, float, bool, null)
+	switch v := value.(type) {
+	case string:
+		assert.Equals = v
+		return assert, nil
+	case int:
+		assert.Equals = fmt.Sprintf("%d", v)
+		return assert, nil
+	case int64:
+		assert.Equals = fmt.Sprintf("%d", v)
+		return assert, nil
+	case float64:
+		assert.Equals = fmt.Sprintf("%v", v)
+		return assert, nil
+	case bool:
+		assert.Equals = fmt.Sprintf("%t", v)
+		return assert, nil
+	case nil:
+		assert.Equals = "null"
 		return assert, nil
 	}
 
 	// If value is a map, parse the assertion specs
 	mapValue, ok := value.(map[string]interface{})
 	if !ok {
-		return TestBodyAssert{}, fmt.Errorf("assertion value must be either a string or an object, got %T", value)
+		return TestBodyAssert{}, fmt.Errorf("assertion value must be either a string, number, boolean, null, or an object, got %T", value)
 	}
 
 	// Track which assertions are set for conflict detection
@@ -85,12 +106,40 @@ func parseBodyAssertValue(path string, value interface{}) (TestBodyAssert, error
 		assert.NotContains = v
 		setAssertions = append(setAssertions, "not_contains")
 	}
-	if v, ok := mapValue["equals"].(string); ok {
-		assert.Equals = v
+	// Handle equals with multiple types
+	if v, ok := mapValue["equals"]; ok {
+		switch val := v.(type) {
+		case string:
+			assert.Equals = val
+		case int, int64:
+			assert.Equals = fmt.Sprintf("%d", val)
+		case float64:
+			assert.Equals = fmt.Sprintf("%v", val)
+		case bool:
+			assert.Equals = fmt.Sprintf("%t", val)
+		case nil:
+			assert.Equals = "null"
+		default:
+			return TestBodyAssert{}, fmt.Errorf("equals value must be a string, number, boolean, or null, got %T", v)
+		}
 		setAssertions = append(setAssertions, "equals")
 	}
-	if v, ok := mapValue["not_equals"].(string); ok {
-		assert.NotEquals = v
+	// Handle not_equals with multiple types
+	if v, ok := mapValue["not_equals"]; ok {
+		switch val := v.(type) {
+		case string:
+			assert.NotEquals = val
+		case int, int64:
+			assert.NotEquals = fmt.Sprintf("%d", val)
+		case float64:
+			assert.NotEquals = fmt.Sprintf("%v", val)
+		case bool:
+			assert.NotEquals = fmt.Sprintf("%t", val)
+		case nil:
+			assert.NotEquals = "null"
+		default:
+			return TestBodyAssert{}, fmt.Errorf("not_equals value must be a string, number, boolean, or null, got %T", v)
+		}
 		setAssertions = append(setAssertions, "not_equals")
 	}
 	if v, ok := mapValue["matches"].(string); ok {
@@ -144,6 +193,20 @@ func parseBodyAssertValue(path string, value interface{}) (TestBodyAssert, error
 		if !assert.Type.IsValid() {
 			return TestBodyAssert{}, fmt.Errorf("invalid type %q for path %q", v, path)
 		}
+	}
+
+	// Parse array containment assertions
+	if v, ok := mapValue["contains_where"].(map[string]interface{}); ok {
+		assert.ContainsWhere = v
+		setAssertions = append(setAssertions, "contains_where")
+	}
+	if v, ok := mapValue["all_match"].(map[string]interface{}); ok {
+		assert.AllMatch = v
+		setAssertions = append(setAssertions, "all_match")
+	}
+	if v, ok := mapValue["none_match"].(map[string]interface{}); ok {
+		assert.NoneMatch = v
+		setAssertions = append(setAssertions, "none_match")
 	}
 
 	// Check if at least one assertion is provided
@@ -563,63 +626,99 @@ func (e TestBodyAssert) testField(
 		return fmt.Errorf("nil value returned for path: %s", e.Path), true
 	}
 
+	// Test array containment assertions
+	if e.ContainsWhere != nil {
+		if !value.IsArray() {
+			return fmt.Errorf("contains_where can only be used on arrays: %s", e.Path), true
+		}
+		if err := e.testArrayContainsWhere(value); err != nil {
+			return err, true
+		}
+	}
+
+	if e.AllMatch != nil {
+		if !value.IsArray() {
+			return fmt.Errorf("all_match can only be used on arrays: %s", e.Path), true
+		}
+		if err := e.testArrayAllMatch(value); err != nil {
+			return err, true
+		}
+	}
+
+	if e.NoneMatch != nil {
+		if !value.IsArray() {
+			return fmt.Errorf("none_match can only be used on arrays: %s", e.Path), true
+		}
+		if err := e.testArrayNoneMatch(value); err != nil {
+			return err, true
+		}
+	}
+
 	if contains != "" {
-		if !strings.Contains(value.String(), contains) {
-			return fmt.Errorf("value does not contain: %s", contains), true
+		actualValue := value.String()
+		if !strings.Contains(actualValue, contains) {
+			return fmt.Errorf("value does not contain %q (got: %q)", contains, actualValue), true
 		}
 	}
 
 	if notContains != "" {
-		if strings.Contains(value.String(), notContains) {
-			return fmt.Errorf("value contains: %s", notContains), true
+		actualValue := value.String()
+		if strings.Contains(actualValue, notContains) {
+			return fmt.Errorf("value contains %q (got: %q)", notContains, actualValue), true
 		}
 	}
 
 	if equals != "" {
-		if value.String() != equals {
-			return fmt.Errorf("value does not equal: %s", equals), true
+		actualValue := value.String()
+		if actualValue != equals {
+			return fmt.Errorf("expected %q but got %q", equals, actualValue), true
 		}
 	}
 
 	if notEquals != "" {
-		if value.String() == notEquals {
-			return fmt.Errorf("value equals: %s", notEquals), true
+		actualValue := value.String()
+		if actualValue == notEquals {
+			return fmt.Errorf("value equals %q (should not equal, but got: %q)", notEquals, actualValue), true
 		}
 	}
 
 	if matches != "" {
+		actualValue := value.String()
 		res, err := bodyMatches(matches, value)
 		if err != nil {
-			return fmt.Errorf("value does not match regex: %s, error: %w", matches, err), true
+			return fmt.Errorf("value does not match regex %q, error: %w (got: %q)", matches, err, actualValue), true
 		}
 
 		if !res {
-			return fmt.Errorf("value does not match regex: %s", matches), true
+			return fmt.Errorf("value does not match regex %q (got: %q)", matches, actualValue), true
 		}
 	}
 
 	if notMatches != "" {
+		actualValue := value.String()
 		res, err := bodyMatches(notMatches, value)
 		if err != nil {
-			return fmt.Errorf("value matches regex: %s, error: %w", notMatches, err), true
+			return fmt.Errorf("value matches regex %q, error: %w (got: %q)", notMatches, err, actualValue), true
 		}
 
 		if res {
-			return fmt.Errorf("value matches regex: %s", notMatches), true
+			return fmt.Errorf("value matches regex %q (should not match, but got: %q)", notMatches, actualValue), true
 		}
 	}
 
 	if e.Size != 0 {
 		switch value.Type {
 		case gjson.String:
-			if len(value.String()) != e.Size {
-				return fmt.Errorf("value size does not equal: %d", e.Size), true
+			actualSize := len(value.String())
+			if actualSize != e.Size {
+				return fmt.Errorf("expected size %d but got %d", e.Size, actualSize), true
 			}
 		case gjson.JSON:
 			if value.IsArray() {
 				arr := value.Array()
-				if len(arr) != e.Size {
-					return fmt.Errorf("array size does not equal: %d", e.Size), true
+				actualSize := len(arr)
+				if actualSize != e.Size {
+					return fmt.Errorf("expected array size %d but got %d", e.Size, actualSize), true
 				}
 			} else {
 				return fmt.Errorf("value is not an array: %s", e.Path), true
@@ -632,8 +731,9 @@ func (e TestBodyAssert) testField(
 	if e.GreaterThan != 0 {
 		switch value.Type {
 		case gjson.Number:
-			if value.Int() <= int64(e.GreaterThan) {
-				return fmt.Errorf("value is not greater than: %d", e.GreaterThan), true
+			actualValue := value.Int()
+			if actualValue <= int64(e.GreaterThan) {
+				return fmt.Errorf("expected value > %d but got %d", e.GreaterThan, actualValue), true
 			}
 		default:
 			return fmt.Errorf("value is not a number: %s", e.Path), true
@@ -643,8 +743,9 @@ func (e TestBodyAssert) testField(
 	if e.LessThan != 0 {
 		switch value.Type {
 		case gjson.Number:
-			if value.Int() >= int64(e.LessThan) {
-				return fmt.Errorf("value is not less than: %d", e.LessThan), true
+			actualValue := value.Int()
+			if actualValue >= int64(e.LessThan) {
+				return fmt.Errorf("expected value < %d but got %d", e.LessThan, actualValue), true
 			}
 		default:
 			return fmt.Errorf("value is not a number: %s", e.Path), true
@@ -655,45 +756,45 @@ func (e TestBodyAssert) testField(
 		switch e.Type {
 		case BodyFieldTypeString:
 			if value.Type != gjson.String {
-				return fmt.Errorf("value is not a string: %s", e.Path), true
+				return fmt.Errorf("expected type 'string' but got type '%s' at path: %s", value.Type.String(), e.Path), true
 			}
 		case BodyFieldTypeInt:
 			if value.Type != gjson.Number {
-				return fmt.Errorf("value is not a number: %s", e.Path), true
+				return fmt.Errorf("expected type 'int' but got type '%s' at path: %s (value: %q)", value.Type.String(), e.Path, value.String()), true
 			}
 
 			// gjson does not provide a way to check if a number is an integer
 			if !strings.Contains(value.String(), ".") {
 				if value.Type != gjson.Number {
-					return fmt.Errorf("value is not an integer: %s", e.Path), true
+					return fmt.Errorf("expected type 'int' but got type '%s' at path: %s (value: %q)", value.Type.String(), e.Path, value.String()), true
 				}
 			} else {
-				return fmt.Errorf("value is not an integer: %s", e.Path), true
+				return fmt.Errorf("expected type 'int' but got float at path: %s (value: %q)", e.Path, value.String()), true
 			}
 		case BodyFieldTypeFloat:
 			if value.Type != gjson.Number {
-				return fmt.Errorf("value is not a float: %s", e.Path), true
+				return fmt.Errorf("expected type 'float' but got type '%s' at path: %s (value: %q)", value.Type.String(), e.Path, value.String()), true
 			}
 
 			// gjson does not provide a way to check if a number is a float
 			if strings.Contains(value.String(), ".") {
 				if value.Type != gjson.Number {
-					return fmt.Errorf("value is not a float: %s", e.Path), true
+					return fmt.Errorf("expected type 'float' but got type '%s' at path: %s (value: %q)", value.Type.String(), e.Path, value.String()), true
 				}
 			} else {
-				return fmt.Errorf("value is not a float: %s", e.Path), true
+				return fmt.Errorf("expected type 'float' but got int at path: %s (value: %q)", e.Path, value.String()), true
 			}
 		case BodyFieldTypeBool:
 			if value.Type != gjson.True && value.Type != gjson.False {
-				return fmt.Errorf("value is not a boolean: %s", e.Path), true
+				return fmt.Errorf("expected type 'bool' but got type '%s' at path: %s (value: %q)", value.Type.String(), e.Path, value.String()), true
 			}
 		case BodyFieldTypeArray:
 			if !value.IsArray() {
-				return fmt.Errorf("value is not an array: %s", e.Path), true
+				return fmt.Errorf("expected type 'array' but got type '%s' at path: %s", value.Type.String(), e.Path), true
 			}
 		case BodyFieldTypeObject:
 			if !value.IsObject() {
-				return fmt.Errorf("value is not an object: %s", e.Path), true
+				return fmt.Errorf("expected type 'object' but got type '%s' at path: %s", value.Type.String(), e.Path), true
 			}
 		default:
 			return fmt.Errorf("invalid type: %s", e.Type), true
@@ -746,6 +847,211 @@ func (e TestBodyAssert) getValueFromPathWithBody(body []byte) (*gjson.Result, er
 	}
 
 	return &value, nil
+}
+
+// testArrayContainsWhere checks if at least one array element matches all conditions
+func (e TestBodyAssert) testArrayContainsWhere(value *gjson.Result) error {
+	if !value.IsArray() {
+		return fmt.Errorf("contains_where requires an array at path: %s", e.Path)
+	}
+
+	array := value.Array()
+	if len(array) == 0 {
+		return fmt.Errorf("array is empty, cannot match contains_where conditions at path: %s", e.Path)
+	}
+
+	for _, item := range array {
+		if matchesConditions(&item, e.ContainsWhere) {
+			return nil // Found at least one match
+		}
+	}
+
+	return fmt.Errorf("no array element matches contains_where conditions at path: %s", e.Path)
+}
+
+// testArrayAllMatch checks if all array elements match the conditions
+func (e TestBodyAssert) testArrayAllMatch(value *gjson.Result) error {
+	if !value.IsArray() {
+		return fmt.Errorf("all_match requires an array at path: %s", e.Path)
+	}
+
+	array := value.Array()
+	if len(array) == 0 {
+		return nil // Empty array vacuously satisfies all_match
+	}
+
+	for i, item := range array {
+		if !matchesConditions(&item, e.AllMatch) {
+			return fmt.Errorf("array element at index %d does not match all_match conditions at path: %s", i, e.Path)
+		}
+	}
+
+	return nil
+}
+
+// testArrayNoneMatch checks if no array elements match the conditions
+func (e TestBodyAssert) testArrayNoneMatch(value *gjson.Result) error {
+	if !value.IsArray() {
+		return fmt.Errorf("none_match requires an array at path: %s", e.Path)
+	}
+
+	array := value.Array()
+	for i, item := range array {
+		if matchesConditions(&item, e.NoneMatch) {
+			return fmt.Errorf("array element at index %d matches none_match conditions (should not match) at path: %s", i, e.Path)
+		}
+	}
+
+	return nil
+}
+
+// matchesConditions checks if a gjson.Result matches all conditions in the map
+func matchesConditions(item *gjson.Result, conditions map[string]interface{}) bool {
+	for key, expectedValue := range conditions {
+		fieldValue := item.Get(key)
+
+		// Handle different types of conditions
+		switch v := expectedValue.(type) {
+		case string:
+			// Simple equality check
+			if fieldValue.String() != v {
+				return false
+			}
+		case int, int64, float64:
+			// Numeric equality
+			if fieldValue.Num != toFloat64(v) {
+				return false
+			}
+		case bool:
+			// Boolean equality
+			if fieldValue.Bool() != v {
+				return false
+			}
+		case map[string]interface{}:
+			// Nested conditions (operators like >, <, etc.)
+			if !matchesNestedConditions(&fieldValue, v) {
+				return false
+			}
+		default:
+			// Fallback to string comparison
+			if fieldValue.String() != fmt.Sprint(v) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// matchesNestedConditions handles operator-based conditions like { ">": 100 }
+func matchesNestedConditions(fieldValue *gjson.Result, conditions map[string]interface{}) bool {
+	for operator, value := range conditions {
+		numValue := toFloat64(value)
+		fieldNum := fieldValue.Num
+
+		switch operator {
+		case ">", "greater_than":
+			if fieldNum <= numValue {
+				return false
+			}
+		case "<", "less_than":
+			if fieldNum >= numValue {
+				return false
+			}
+		case ">=":
+			if fieldNum < numValue {
+				return false
+			}
+		case "<=":
+			if fieldNum > numValue {
+				return false
+			}
+		case "equals":
+			if strVal, ok := value.(string); ok {
+				if fieldValue.String() != strVal {
+					return false
+				}
+			} else {
+				if fieldNum != numValue {
+					return false
+				}
+			}
+		case "not_equals":
+			if strVal, ok := value.(string); ok {
+				if fieldValue.String() == strVal {
+					return false
+				}
+			} else {
+				if fieldNum == numValue {
+					return false
+				}
+			}
+		case "contains":
+			if strVal, ok := value.(string); ok {
+				if !strings.Contains(fieldValue.String(), strVal) {
+					return false
+				}
+			}
+		case "matches":
+			if strVal, ok := value.(string); ok {
+				regex, err := regexp.Compile(strVal)
+				if err != nil || !regex.MatchString(fieldValue.String()) {
+					return false
+				}
+			}
+		case "present":
+			if boolVal, ok := value.(bool); ok {
+				if boolVal && !fieldValue.Exists() {
+					return false
+				}
+				if !boolVal && fieldValue.Exists() {
+					return false
+				}
+			}
+		case "type":
+			if strVal, ok := value.(string); ok {
+				if !matchesType(fieldValue, strVal) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+// matchesType checks if a value matches the expected type
+func matchesType(value *gjson.Result, expectedType string) bool {
+	switch expectedType {
+	case "string":
+		return value.Type == gjson.String
+	case "int", "float", "number":
+		return value.Type == gjson.Number
+	case "bool", "boolean":
+		return value.Type == gjson.True || value.Type == gjson.False
+	case "array":
+		return value.IsArray()
+	case "object":
+		return value.IsObject()
+	case "null":
+		return value.Type == gjson.Null
+	default:
+		return false
+	}
+}
+
+// toFloat64 converts various numeric types to float64
+func toFloat64(v interface{}) float64 {
+	switch num := v.(type) {
+	case int:
+		return float64(num)
+	case int64:
+		return float64(num)
+	case float64:
+		return num
+	case float32:
+		return float64(num)
+	default:
+		return 0
+	}
 }
 
 // interpolateFixtureValue replaces fixture references in the provided string.

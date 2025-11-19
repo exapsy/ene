@@ -217,6 +217,23 @@ body_asserts:
   # Size check
   tags:
     length: 3
+  
+  # Array containment - check if array contains item matching conditions
+  products:
+    contains_where:
+      name: iPhone
+      price:
+        ">": 900
+  
+  # All items must match
+  items:
+    all_match:
+      active: true
+  
+  # No items should match
+  errors:
+    none_match:
+      critical: true
 ```
 
 ## Header Assertions
@@ -452,6 +469,26 @@ units:
     env:
       - DB_URL={{ database.dsn }}
 ```
+
+## Error Messages
+
+When assertions fail, ENE provides detailed error messages showing both expected and actual values:
+
+**Header Assertion Errors:**
+```
+✗ header "Content-Type": expected "application/json" but got "text/plain"
+✗ header "Cache-Control" does not contain "no-cache" (got: "public, max-age=3600")
+```
+
+**Body Assertion Errors:**
+```
+✗ expected "John Doe" but got "Jane Smith"
+✗ expected value > 18 but got 15
+✗ expected array size 5 but got 3
+✗ expected type 'string' but got type 'number' at path: user.age (value: "25")
+```
+
+These messages help you quickly identify what was expected versus what was actually received.
 
 ## Debugging Tips
 

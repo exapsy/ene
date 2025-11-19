@@ -710,7 +710,20 @@ tests:
         users.0.tags:
           type: array
         
+        # Array containment - check if array contains item matching conditions
+        users:
+          contains_where:
+            name: "Alice"
+            age:
+              ">": 18
+        
+        # Check all items match conditions
+        users:
+          all_match:
+            active: true
+        
         # Metadata validation
+        total: 2
         metadata.total: 2
         
         metadata.timestamp:
@@ -818,6 +831,110 @@ tests:
       status_code: 200
       body_asserts:
         status: "healthy"
+
+## Array Assertions
+
+### Testing Array Contents with Complex Objects
+
+```yaml
+kind: e2e_test:v1
+name: array-testing
+
+units:
+  - name: api
+    kind: httpmock
+    app_port: 8080
+    routes:
+      - path: /products
+        method: GET
+        response:
+          status: 200
+          body:
+            products:
+              - id: 1
+                name: "iPhone"
+                price: 999
+                category: "electronics"
+                in_stock: true
+              - id: 2
+                name: "iPad"
+                price: 799
+                category: "electronics"
+                in_stock: true
+              - id: 3
+                name: "MacBook"
+                price: 1999
+                category: "electronics"
+                in_stock: false
+
+target: api
+
+tests:
+  - name: test array contains specific item
+    kind: http
+    request:
+      path: /products
+      method: GET
+    expect:
+      status_code: 200
+      body_asserts:
+        # Check if array contains item with specific name
+        products:
+          contains_where:
+            name: "iPhone"
+  
+  - name: test array contains item matching multiple conditions
+    kind: http
+    request:
+      path: /products
+      method: GET
+    expect:
+      status_code: 200
+      body_asserts:
+        # Check if array contains expensive out-of-stock item
+        products:
+          contains_where:
+            category: "electronics"
+            price:
+              ">": 1500
+            in_stock: false
+  
+  - name: test all items match conditions
+    kind: http
+    request:
+      path: /products
+      method: GET
+    expect:
+      status_code: 200
+      body_asserts:
+        # Ensure all products are electronics with positive price
+        products:
+          all_match:
+            category: "electronics"
+            price:
+              ">": 0
+  
+  - name: test no items match condition
+    kind: http
+    request:
+      path: /products
+      method: GET
+    expect:
+      status_code: 200
+      body_asserts:
+        # Ensure no products are overpriced
+        products:
+          none_match:
+            price:
+              ">": 5000
+```
+
+**Key Features:**
+- `contains_where`: Checks if at least one array element matches all specified conditions
+- `all_match`: Ensures every array element matches the conditions
+- `none_match`: Ensures no array elements match the conditions
+- Works with nested conditions like `>`, `<`, `equals`, `contains`, etc.
+- Can combine multiple conditions on different fields
 ```
 
 ---
@@ -851,6 +968,39 @@ ene dry-run tests/user-crud/suite.yml --verbose
 6. **Clean test data** - Use migrations to set up known state
 7. **Test error cases** - Don't just test happy paths
 8. **Use meaningful assertions** - Test what matters for your application
+9. **Read error messages carefully** - ENE provides detailed error messages showing both expected and actual values to help diagnose failures quickly
+
+### Understanding Test Failures
+
+When assertions fail, ENE provides detailed error messages that show both what was expected and what was actually received:
+
+**Header Assertion Failures:**
+```
+✗ header "Content-Type": expected "application/json" but got "text/plain"
+✗ header "Cache-Control" does not contain "no-cache" (got: "public, max-age=3600")
+```
+
+**Body Assertion Failures:**
+```
+✗ expected "John Doe" but got "Jane Smith"
+✗ expected value > 18 but got 15
+✗ expected array size 5 but got 3
+✗ expected type 'string' but got type 'number' at path: user.age (value: "25")
+```
+
+These messages help you quickly identify:
+- What value was expected
+- What value was actually received
+- Where in the response the mismatch occurred (for body assertions)
+
+**Example Test Failure Output:**
+```
+[1/1] api-tests (Setup: 50ms | Tests: 0ms | Overhead: 6.00s)
+  ✗  create user (failed after 3 retries)
+     └─ header "Content-Type": expected "application/json; charset=utf-8" but got "application/json"
+```
+
+This makes debugging much faster as you can immediately see the difference between expected and actual values without needing to inspect raw responses.
 
 ---
 
