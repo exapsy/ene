@@ -174,13 +174,13 @@ type Fixture interface {
 }
 
 type FixtureV1 struct {
-	FixtureName string `yaml:"name"`
+	FixtureName string
 	// The hard value of the fixture
-	FixtureValue string `yaml:"value,omitempty"`
+	FixtureValue string
 	// FixtureFile is an optional file path for the fixture value
-	FixtureFile string `yaml:"file,omitempty"`
+	FixtureFile string
 	// RelativePath is the relative path to the fixture file
-	RelativePath string `yaml:"relative_path,omitempty"`
+	RelativePath string
 }
 
 func (f *FixtureV1) Name() string {
@@ -208,6 +208,56 @@ func (f *FixtureV1) Value() []byte {
 		f.FixtureValue = string(data)
 
 		return data
+	}
+
+	return nil
+}
+
+// UnmarshalYAML implements custom YAML unmarshaling for FixtureV1.
+// It supports two formats:
+// 1. Simple key-value: `- fixtureName: value`
+// 2. File-based: `- fixtureName: { file: ./path.json }`
+func (f *FixtureV1) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("fixture must be a mapping, got %v", node.Kind)
+	}
+
+	// Expect exactly one key-value pair in the mapping
+	if len(node.Content) != 2 {
+		return fmt.Errorf("fixture must have exactly one key-value pair, got %d pairs", len(node.Content)/2)
+	}
+
+	keyNode := node.Content[0]
+	valueNode := node.Content[1]
+
+	// The key is the fixture name
+	f.FixtureName = keyNode.Value
+
+	// The value can be either:
+	// 1. A scalar (string, number, bool) - direct value
+	// 2. A mapping with "file" key - file reference
+	switch valueNode.Kind {
+	case yaml.ScalarNode:
+		// Direct value (string, number, bool, etc.)
+		f.FixtureValue = valueNode.Value
+	case yaml.MappingNode:
+		// File reference: { file: ./path.json }
+		for i := 0; i < len(valueNode.Content); i += 2 {
+			key := valueNode.Content[i]
+			val := valueNode.Content[i+1]
+
+			if key.Value == "file" {
+				f.FixtureFile = val.Value
+			} else {
+				return fmt.Errorf("unknown field in fixture value mapping: %s", key.Value)
+			}
+		}
+
+		if f.FixtureFile == "" {
+			return fmt.Errorf("fixture mapping must have 'file' field")
+		}
+	default:
+		return fmt.Errorf("fixture value must be a scalar or mapping with 'file' key, got %v", valueNode.Kind)
 	}
 
 	return nil
@@ -514,33 +564,56 @@ func (t *TestSuiteV1) orderUnitsByDependencies(varDependencies []EnvDependency) 
 	reorderedUnits := make([]Unit, len(t.TestUnits))
 	copy(reorderedUnits, t.TestUnits)
 
+	// Track which units we've already processed to avoid duplicate swaps
+	processed := make(map[string]map[string]bool)
+
 	for _, dep := range varDependencies {
-		unitNameThatDependsOn := dep.DependencyUnitName
+		dependantName := dep.DependantUnitName
+		dependencyName := dep.DependencyUnitName
 
-		var unitThatDependOn Unit
+		// Skip if we've already processed this dependency relationship
+		if processed[dependantName] == nil {
+			processed[dependantName] = make(map[string]bool)
+		}
+		if processed[dependantName][dependencyName] {
+			continue
+		}
+		processed[dependantName][dependencyName] = true
 
-		var unitIndexThatDependOn int
+		// Find current positions in reorderedUnits
+		var dependantIdx, dependencyIdx int = -1, -1
 
-		for i, unit := range t.TestUnits {
-			if unit.Name() == unitNameThatDependsOn {
-				unitThatDependOn = unit
-				unitIndexThatDependOn = i
-
-				break
+		for i, unit := range reorderedUnits {
+			if unit.Name() == dependantName {
+				dependantIdx = i
+			}
+			if unit.Name() == dependencyName {
+				dependencyIdx = i
 			}
 		}
 
-		if unitThatDependOn == nil {
+		if dependantIdx == -1 {
 			return nil, fmt.Errorf(
 				"unit %s not found for dependency %s.%s",
-				unitNameThatDependsOn,
+				dependantName,
 				dep.DependencyUnitName,
 				dep.VarName,
 			)
 		}
 
-		// Place the dependant after the dependency
-		reorderedUnits[unitIndexThatDependOn], reorderedUnits[dep.DependencyPosition] = reorderedUnits[dep.DependencyPosition], unitThatDependOn
+		if dependencyIdx == -1 {
+			return nil, fmt.Errorf(
+				"dependency unit %s not found for %s.%s",
+				dependencyName,
+				dep.DependencyUnitName,
+				dep.VarName,
+			)
+		}
+
+		// If dependency comes after dependant, swap them
+		if dependencyIdx > dependantIdx {
+			reorderedUnits[dependantIdx], reorderedUnits[dependencyIdx] = reorderedUnits[dependencyIdx], reorderedUnits[dependantIdx]
+		}
 	}
 
 	return reorderedUnits, nil
@@ -900,7 +973,7 @@ func (t *TestSuiteV1) interpolateVarsAndStartUnits(
 			EventSink:    opts.EventSink,
 			Fixtures:     t.Fixtures,
 			Debug:        opts.Debug,
-			WorkingDir:   opts.BaseDir,
+			WorkingDir:   t.RelativePath,
 		}); err != nil {
 			err = fmt.Errorf("start unit %s: %w", unit.Name(), err)
 

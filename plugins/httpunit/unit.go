@@ -58,7 +58,28 @@ func (e *ContainerCreationError) Error() string {
 }
 
 func (e *ContainerCreationError) UserFriendlyMessage() string {
-	return "failed to start container"
+	errMsg := e.err.Error()
+	prefix := fmt.Sprintf("%s build failed", e.containerName)
+
+	// Provide helpful hints for common errors
+	if strings.Contains(errMsg, "not found") && strings.Contains(errMsg, ".netrc") {
+		return fmt.Sprintf("%s: .netrc file not found (required for private Go modules)", prefix)
+	}
+	if strings.Contains(errMsg, "not found") && (strings.Contains(errMsg, "go.mod") || strings.Contains(errMsg, "go.sum")) {
+		return fmt.Sprintf("%s: go.mod or go.sum not found (check Dockerfile context)", prefix)
+	}
+	if strings.Contains(errMsg, "exit code: 1") && strings.Contains(errMsg, "go mod download") {
+		return fmt.Sprintf("%s: go mod download failed (check .netrc credentials or network)", prefix)
+	}
+	if strings.Contains(errMsg, "Dockerfile") && strings.Contains(errMsg, "not found") {
+		return fmt.Sprintf("%s: Dockerfile not found", prefix)
+	}
+
+	// For other errors, show a truncated version of the actual error
+	if len(errMsg) > 120 {
+		return fmt.Sprintf("%s: %s...", prefix, errMsg[:117])
+	}
+	return fmt.Sprintf("%s: %s", prefix, errMsg)
 }
 
 func (e *ContainerCreationError) Unwrap() error {
@@ -320,13 +341,21 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 		}
 	}
 
-	dockerfileDir := filepath.Join(opts.WorkingDir)
-	dockerfileDir, err = filepath.Abs(dockerfileDir)
+	// Resolve the Dockerfile path relative to WorkingDir (suite directory)
+	dockerfilePath := filepath.Join(opts.WorkingDir, s.Dockerfile)
+	dockerfilePath, err = filepath.Abs(dockerfilePath)
 	if err != nil {
-		return fmt.Errorf("get absolute path of dockerfile directory: %w", err)
+		return fmt.Errorf("get absolute path of dockerfile: %w", err)
 	}
 
+	// The build context is the directory containing the Dockerfile
+	dockerfileDir := filepath.Dir(dockerfilePath)
+
 	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get current working directory: %w", err)
+	}
+
 	dockerBaseDir, err := filepath.Rel(cwd, dockerfileDir)
 	if err != nil {
 		return fmt.Errorf("get relative path of dockerfile directory: %w", err)
@@ -371,7 +400,7 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 
 		fromDockerfile = testcontainers.FromDockerfile{
 			Context:        dockerBaseDir,
-			Dockerfile:     s.Dockerfile,
+			Dockerfile:     filepath.Base(dockerfilePath),
 			BuildLogWriter: buildLogWriter,
 			Repo:           fmt.Sprintf("ene-%s", s.name),
 			Tag:            contentHash,

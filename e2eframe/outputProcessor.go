@@ -246,8 +246,10 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 		// For now, we'll track this in the secretary and show in summary
 
 	case EventSuiteError:
+		// Clear any active spinner first
+		p.renderer.ClearSpinner()
+
 		// Handle suite errors
-		// For now, we'll let the old system handle this
 		color := p.color
 		if suiteEvent, ok := event.(*SuiteErrorEvent); ok {
 			var errorMsg string
@@ -256,11 +258,11 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 			} else {
 				errorMsg = suiteEvent.Message()
 			}
-			p.printf("%s✖ SUITE ERROR:%s %s - %s\n",
-				color.Red, color.Reset, suiteEvent.SuiteName(), errorMsg)
+			p.printf("  %s✗%s %s\n",
+				color.Red, color.Reset, errorMsg)
 		} else if suiteEvent, ok := event.(*BaseEvent); ok {
-			p.printf("%s✖ SUITE ERROR:%s %s - %s\n",
-				color.Red, color.Reset, suiteEvent.SuiteName(), suiteEvent.Message())
+			p.printf("  %s✗%s %s\n",
+				color.Red, color.Reset, suiteEvent.Message())
 		}
 	}
 

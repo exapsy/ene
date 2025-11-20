@@ -759,6 +759,16 @@ func (r *ModernRenderer) stopSpinnerLocked() {
 	r.clearLine()
 }
 
+// ClearSpinner clears any active spinner (public wrapper for stopSpinnerLocked)
+func (r *ModernRenderer) ClearSpinner() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.spinnerActive {
+		r.stopSpinnerLocked()
+	}
+}
+
 // animateSpinner runs the spinner animation loop
 func (r *ModernRenderer) animateSpinner(format string, ticker *time.Ticker, stopCh, stoppedCh chan struct{}) {
 	defer func() {

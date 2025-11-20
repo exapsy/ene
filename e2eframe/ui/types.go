@@ -47,6 +47,9 @@ type Renderer interface {
 	// RenderSummary renders the final summary
 	RenderSummary(summary Summary) error
 
+	// ClearSpinner clears any active spinner (used before showing errors)
+	ClearSpinner()
+
 	// Flush ensures all output is written
 	Flush() error
 }

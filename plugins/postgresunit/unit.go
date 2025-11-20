@@ -3,6 +3,7 @@ package postgresunit
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -308,7 +309,8 @@ func (p *PostgresUnit) runMigrations(ctx context.Context, workingDir string) err
 
 	// Check if migrations path exists
 	if _, err := os.Stat(migrationsPath); os.IsNotExist(err) {
-		return fmt.Errorf("migrations path does not exist: %s", migrationsPath)
+		return fmt.Errorf("migrations path does not exist: %s (resolved from workingDir: %s, migrationsPath: %s)",
+			migrationsPath, workingDir, p.MigrationsPath)
 	}
 
 	// Read all SQL files in the migrations directory
@@ -338,7 +340,7 @@ func (p *PostgresUnit) runSQLFile(ctx context.Context, filePath string) error {
 	}
 
 	// Execute the SQL content
-	exitCode, output, err := p.container.Exec(ctx, []string{
+	exitCode, outputReader, err := p.container.Exec(ctx, []string{
 		"psql",
 		"-U", p.user,
 		"-d", p.database,
@@ -348,8 +350,17 @@ func (p *PostgresUnit) runSQLFile(ctx context.Context, filePath string) error {
 		return fmt.Errorf("execute SQL: %w", err)
 	}
 
+	// Read the output
+	outputBytes, readErr := io.ReadAll(outputReader)
+	if readErr != nil {
+		return fmt.Errorf("read command output: %w", readErr)
+	}
+	output := string(outputBytes)
+
 	if exitCode != 0 {
-		return fmt.Errorf("SQL execution failed with exit code %d: %s", exitCode, output)
+		// Include both the SQL file name and the actual error output
+		return fmt.Errorf("SQL execution failed with exit code %d\nFile: %s\nError output:\n%s",
+			exitCode, filepath.Base(filePath), strings.TrimSpace(output))
 	}
 
 	return nil
