@@ -776,19 +776,14 @@ func (s *HTTPUnit) WaitForReady(ctx context.Context) error {
 
 func (s *HTTPUnit) Stop() error {
 	if s.cont != nil {
-		// First try to stop gracefully with timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// Use Terminate() to ensure container is fully removed, not just stopped.
+		// This is critical for proper network cleanup - stopped containers remain
+		// attached to networks, preventing network removal and causing leaks.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		// Try graceful stop first
-		if err := s.cont.Stop(ctx, nil); err != nil {
-			// If graceful stop fails, force terminate
-			terminateCtx, terminateCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer terminateCancel()
-
-			if termErr := s.cont.Terminate(terminateCtx); termErr != nil {
-				return fmt.Errorf("failed to stop container gracefully (%v) and terminate (%v)", err, termErr)
-			}
+		if err := s.cont.Terminate(ctx); err != nil {
+			return fmt.Errorf("failed to terminate container: %w", err)
 		}
 
 		s.cont = nil

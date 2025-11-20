@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/testcontainers/testcontainers-go"
@@ -752,6 +753,8 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		)
 
 		// Stop all units and wait for them to fully terminate
+		stoppedUnits := 0
+		failedUnits := []string{}
 		for i := len(reorderedUnits) - 1; i >= 0; i-- {
 			unit := reorderedUnits[i]
 			if unit == nil {
@@ -765,8 +768,25 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 			)
 
 			if err := unit.Stop(); err != nil {
-				fmt.Printf("failed to stop unit %s: %v\n", unit.Name(), err)
+				failedUnits = append(failedUnits, unit.Name())
+				fmt.Printf("Warning: failed to stop unit %s: %v\n", unit.Name(), err)
+			} else {
+				stoppedUnits++
 			}
+		}
+
+		if len(failedUnits) > 0 {
+			t.sendEvent(
+				opts.EventSink,
+				EventWarning,
+				fmt.Sprintf("Failed to stop %d units: %v", len(failedUnits), failedUnits),
+			)
+		} else {
+			t.sendEvent(
+				opts.EventSink,
+				EventInfo,
+				fmt.Sprintf("Successfully stopped %d units", stoppedUnits),
+			)
 		}
 
 		// Wait for containers to actually terminate (with configurable timeout)
@@ -797,18 +817,25 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		t.sendEvent(
 			opts.EventSink,
 			EventInfo,
-			"Removing network...",
+			fmt.Sprintf("Removing network %s...", net.Name),
 		)
 
 		if err := ForceCleanupNetwork(ctx, net); err != nil {
-			fmt.Printf("failed to cleanup network %s: %v\n", net.Name, err)
+			t.sendEvent(
+				opts.EventSink,
+				EventWarning,
+				fmt.Sprintf("Failed to cleanup network %s: %v", net.Name, err),
+			)
+			fmt.Printf("\nWarning: Failed to cleanup network %s: %v\n", net.Name, err)
+			fmt.Printf("To manually cleanup, run: docker network rm %s\n", net.Name)
+			fmt.Printf("Or to cleanup all unused networks: docker network prune -f\n")
+		} else {
+			t.sendEvent(
+				opts.EventSink,
+				EventNetworkDestroyed,
+				fmt.Sprintf("Network %s destroyed", net.Name),
+			)
 		}
-
-		t.sendEvent(
-			opts.EventSink,
-			EventNetworkDestroyed,
-			fmt.Sprintf("Network %s destroyed", net.Name),
-		)
 	}()
 
 	// Run before all tests script if provided
@@ -1134,27 +1161,53 @@ func ForceCleanupNetwork(ctx context.Context, net *testcontainers.DockerNetwork)
 		return fmt.Errorf("inspect network: %w", err)
 	}
 
-	// Disconnect containers that are still connected to this network
+	// Disconnect and force remove any containers still connected to this network
+	disconnectedCount := 0
+	failedDisconnects := 0
 	for containerID := range networkInfo.Containers {
 		// Check if container still exists and is not already being removed
-		_, err := dockerCli.ContainerInspect(ctx, containerID)
+		containerInfo, err := dockerCli.ContainerInspect(ctx, containerID)
 		if err != nil {
 			// Container doesn't exist anymore, skip
 			continue
 		}
 
+		// Try to disconnect the container
 		err = dockerCli.NetworkDisconnect(ctx, net.Name, containerID, true)
 		if err != nil && !strings.Contains(err.Error(), "is not connected") &&
 			!strings.Contains(err.Error(), "marked for removal") {
-			fmt.Printf("Warning: Failed to disconnect container %s: %v\n", containerID[:12], err)
+			fmt.Printf("Warning: Failed to disconnect container %s (%s): %v\n",
+				containerID[:12], containerInfo.Name, err)
+			failedDisconnects++
+
+			// Try to force remove the container if it's stopped
+			if !containerInfo.State.Running {
+				removeErr := dockerCli.ContainerRemove(ctx, containerID, container.RemoveOptions{
+					Force: true,
+				})
+				if removeErr != nil {
+					fmt.Printf("Warning: Failed to force remove stopped container %s: %v\n",
+						containerID[:12], removeErr)
+				} else {
+					fmt.Printf("Forcefully removed stopped container %s\n", containerID[:12])
+					disconnectedCount++
+				}
+			}
+		} else {
+			disconnectedCount++
 		}
 	}
 
+	if failedDisconnects > 0 {
+		fmt.Printf("Warning: %d containers could not be disconnected from network %s\n",
+			failedDisconnects, net.Name)
+	}
+
 	// Wait longer for Docker to process the disconnects and container removals
-	time.Sleep(1 * time.Second)
+	time.Sleep(2 * time.Second)
 
 	// Try to remove the network with retries
-	maxRetries := 3
+	maxRetries := 5
 	for i := 0; i < maxRetries; i++ {
 		err = dockerCli.NetworkRemove(ctx, net.Name)
 		if err == nil {
@@ -1167,9 +1220,25 @@ func ForceCleanupNetwork(ctx context.Context, net *testcontainers.DockerNetwork)
 		}
 
 		if i < maxRetries-1 {
-			// Wait before retry
-			time.Sleep(500 * time.Millisecond)
+			// Exponential backoff
+			waitTime := time.Duration(500*(i+1)) * time.Millisecond
+			fmt.Printf("Network removal attempt %d/%d failed, retrying in %v...\n",
+				i+1, maxRetries, waitTime)
+			time.Sleep(waitTime)
 		}
+	}
+
+	// If we still can't remove the network, provide detailed error info
+	if err != nil {
+		// Get fresh network info to see what's still connected
+		freshNetworkInfo, inspectErr := dockerCli.NetworkInspect(ctx, net.Name, network.InspectOptions{})
+		if inspectErr == nil && len(freshNetworkInfo.Containers) > 0 {
+			fmt.Printf("Network %s still has %d connected containers:\n", net.Name, len(freshNetworkInfo.Containers))
+			for containerID, endpoint := range freshNetworkInfo.Containers {
+				fmt.Printf("  - %s (IP: %s)\n", containerID[:12], endpoint.IPv4Address)
+			}
+		}
+		return fmt.Errorf("failed to remove network after %d attempts: %w", maxRetries, err)
 	}
 
 	return err

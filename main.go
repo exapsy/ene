@@ -7,8 +7,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/exapsy/ene/e2eframe"
 	_ "github.com/exapsy/ene/plugins/httpmockunit"
@@ -91,7 +93,32 @@ var rootCmd = &cobra.Command{
 		maxRetries := 3       // Keep reliable retry behavior
 		isCleanupCache = true // Always cleanup for better performance
 
-		err = e2eframe.Run(context.Background(), &e2eframe.RunOpts{
+		// Set up signal handling for graceful shutdown
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+		// Handle signals in a goroutine
+		go func() {
+			sig := <-sigChan
+			fmt.Printf("\n%s%s⚠ Received signal %v, initiating graceful shutdown...%s\n",
+				colorBold, colorYellow, sig, colorReset)
+			fmt.Printf("%s%sPlease wait for cleanup to complete. Press Ctrl+C again to force quit.%s\n",
+				colorBold, colorYellow, colorReset)
+			cancel()
+
+			// Second signal forces immediate exit
+			<-sigChan
+			fmt.Printf("\n%s%s✖ Force quit - Docker resources may be left behind%s\n",
+				colorBold, colorRed, colorReset)
+			fmt.Printf("%s%sRun 'docker network prune -f' to clean up orphaned networks%s\n",
+				colorYellow, colorBold, colorReset)
+			os.Exit(130) // 128 + SIGINT
+		}()
+
+		err = e2eframe.Run(ctx, &e2eframe.RunOpts{
 			FilterFunc:   shouldIncludeTest,
 			Verbose:      isVerbose,
 			Parallel:     isParallel,
@@ -279,6 +306,33 @@ var listSuitesCmd = &cobra.Command{
 	},
 }
 
+var cleanupNetworksCmd = &cobra.Command{
+	Use:   "cleanup-networks",
+	Short: "Clean up orphaned Docker networks created by ene",
+	Long: `Remove Docker networks that were left behind due to interrupted tests or errors.
+This is useful when you run out of network space or have accumulated many unused networks.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		force := cmd.Flag("force").Value.String() == "true"
+		all := cmd.Flag("all").Value.String() == "true"
+
+		if !force && !all {
+			fmt.Printf("%s%sThis will remove Docker networks created by ene tests.%s\n", colorBold, colorYellow, colorReset)
+			fmt.Printf("To proceed, use: %sene cleanup-networks --force%s\n", colorCyan, colorReset)
+			fmt.Printf("To remove ALL unused networks: %sene cleanup-networks --all%s\n", colorCyan, colorReset)
+			return
+		}
+
+		ctx := context.Background()
+
+		if err := e2eframe.CleanupOrphanedNetworks(ctx, all); err != nil {
+			fmt.Printf("%s%s✖ ERROR: %v%s\n", colorBold, colorRed, err, colorReset)
+			os.Exit(1)
+		}
+
+		fmt.Printf("%s%s✓ Network cleanup completed%s\n", colorBold, colorGreen, colorReset)
+	},
+}
+
 // ScaffoldTest creates a new test suite in ./tests/<name>.
 func ScaffoldTest(testName string, templates []string) error {
 	if testName == "" {
@@ -409,9 +463,13 @@ func init() {
 
 	listSuitesCmd.Flags().String("base-dir", "", "base directory for tests, defaults to current directory")
 
+	cleanupNetworksCmd.Flags().Bool("force", false, "confirm network cleanup")
+	cleanupNetworksCmd.Flags().Bool("all", false, "remove all unused Docker networks (not just ene networks)")
+
 	rootCmd.AddCommand(scaffoldTestCmd)
 	rootCmd.AddCommand(dryRunCmd)
 	rootCmd.AddCommand(listSuitesCmd)
+	rootCmd.AddCommand(cleanupNetworksCmd)
 	rootCmd.AddCommand(versionCmd)
 
 	// Add custom completion for --suite flag
