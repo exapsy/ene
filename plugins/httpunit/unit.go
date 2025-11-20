@@ -63,23 +63,51 @@ func (e *ContainerCreationError) UserFriendlyMessage() string {
 
 	// Provide helpful hints for common errors
 	if strings.Contains(errMsg, "not found") && strings.Contains(errMsg, ".netrc") {
-		return fmt.Sprintf("%s: .netrc file not found (required for private Go modules)", prefix)
+		return fmt.Sprintf("%s: .netrc file not found\n"+
+			"  → Required for private Go modules\n"+
+			"  → Create .netrc in project root with credentials\n"+
+			"  → See project README for setup instructions", prefix)
 	}
 	if strings.Contains(errMsg, "not found") && (strings.Contains(errMsg, "go.mod") || strings.Contains(errMsg, "go.sum")) {
-		return fmt.Sprintf("%s: go.mod or go.sum not found (check Dockerfile context)", prefix)
+		return fmt.Sprintf("%s: go.mod or go.sum not found\n"+
+			"  → Check Dockerfile context is set correctly\n"+
+			"  → Verify Dockerfile path in suite.yml", prefix)
 	}
 	if strings.Contains(errMsg, "exit code: 1") && strings.Contains(errMsg, "go mod download") {
-		return fmt.Sprintf("%s: go mod download failed (check .netrc credentials or network)", prefix)
+		return fmt.Sprintf("%s: go mod download failed\n"+
+			"  → Check .netrc file has valid credentials\n"+
+			"  → Verify network connectivity\n"+
+			"  → Try: docker system prune to clear build cache", prefix)
 	}
 	if strings.Contains(errMsg, "Dockerfile") && strings.Contains(errMsg, "not found") {
-		return fmt.Sprintf("%s: Dockerfile not found", prefix)
+		return fmt.Sprintf("%s: Dockerfile not found\n"+
+			"  → Check the dockerfile path in your suite.yml\n"+
+			"  → Path should be relative to the suite directory", prefix)
+	}
+
+	// Docker daemon issues
+	if strings.Contains(errMsg, "Cannot connect to the Docker daemon") {
+		return fmt.Sprintf("%s: cannot connect to Docker\n"+
+			"  → Check if Docker is running\n"+
+			"  → Try: colima start (macOS) / systemctl start docker (Linux)", prefix)
+	}
+
+	// Build timeout or resource issues
+	if strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "context deadline exceeded") {
+		return fmt.Sprintf("%s: build timeout\n"+
+			"  → Build is taking too long\n"+
+			"  → Check for network issues or large dependencies\n"+
+			"  → Consider increasing startup_timeout in suite.yml", prefix)
 	}
 
 	// For other errors, show a truncated version of the actual error
-	if len(errMsg) > 120 {
-		return fmt.Sprintf("%s: %s...", prefix, errMsg[:117])
+	if len(errMsg) > 100 {
+		return fmt.Sprintf("%s: %s...\n"+
+			"  → Check Docker logs for details\n"+
+			"  → Try: docker system prune to clear cache", prefix, errMsg[:97])
 	}
-	return fmt.Sprintf("%s: %s", prefix, errMsg)
+	return fmt.Sprintf("%s: %s\n"+
+		"  → Check Docker logs for details", prefix, errMsg)
 }
 
 func (e *ContainerCreationError) Unwrap() error {

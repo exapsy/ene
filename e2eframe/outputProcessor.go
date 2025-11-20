@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/exapsy/ene/e2eframe/ui"
@@ -258,11 +259,29 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 			} else {
 				errorMsg = suiteEvent.Message()
 			}
-			p.printf("  %s✗%s %s\n",
-				color.Red, color.Reset, errorMsg)
+			// Split error message by newlines and indent each line
+			lines := strings.Split(errorMsg, "\n")
+			for i, line := range lines {
+				if i == 0 {
+					// First line with error icon
+					p.printf("  %s✗%s  %s\n", color.Red, color.Reset, line)
+				} else {
+					// Subsequent lines indented further
+					p.printf("     %s\n", line)
+				}
+			}
 		} else if suiteEvent, ok := event.(*BaseEvent); ok {
-			p.printf("  %s✗%s %s\n",
-				color.Red, color.Reset, suiteEvent.Message())
+			// Split error message by newlines and indent each line
+			lines := strings.Split(suiteEvent.Message(), "\n")
+			for i, line := range lines {
+				if i == 0 {
+					// First line with error icon
+					p.printf("  %s✗%s  %s\n", color.Red, color.Reset, line)
+				} else {
+					// Subsequent lines indented further
+					p.printf("     %s\n", line)
+				}
+			}
 		}
 	}
 

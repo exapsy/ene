@@ -31,6 +31,48 @@ func (e *InterpolationError) Unwrap() error {
 	return e.err
 }
 
+type NetworkCreationError struct {
+	err error
+}
+
+func (e *NetworkCreationError) Error() string {
+	return fmt.Sprintf("network creation failed: %v", e.err)
+}
+
+func (e *NetworkCreationError) UserFriendlyMessage() string {
+	errMsg := e.err.Error()
+
+	// Check for common Docker network issues
+	if strings.Contains(errMsg, "could not find an available") && strings.Contains(errMsg, "IPv4 address pool") {
+		return "network creation failed: no available IP address pools\n" +
+			"  → Try: docker network prune -f\n" +
+			"  → Or restart Docker: colima restart (macOS) / systemctl restart docker (Linux)"
+	}
+
+	if strings.Contains(errMsg, "network") && strings.Contains(errMsg, "already exists") {
+		return "network creation failed: network name conflict\n" +
+			"  → Try: docker network prune -f"
+	}
+
+	if strings.Contains(errMsg, "permission denied") || strings.Contains(errMsg, "Cannot connect to the Docker daemon") {
+		return "network creation failed: cannot connect to Docker\n" +
+			"  → Check if Docker is running\n" +
+			"  → Try: colima start (macOS) / systemctl start docker (Linux)"
+	}
+
+	// Generic network error
+	if len(errMsg) > 100 {
+		return "network creation failed: " + errMsg[:97] + "...\n" +
+			"  → Try: docker network prune -f"
+	}
+	return "network creation failed: " + errMsg + "\n" +
+		"  → Try: docker network prune -f"
+}
+
+func (e *NetworkCreationError) Unwrap() error {
+	return e.err
+}
+
 type TestSuiteTestKindNotFoundErr struct {
 	Kind TestSuiteTestKind
 }
@@ -656,7 +698,7 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 
 	net, err := tcnetwork.New(ctx)
 	if err != nil {
-		return fmt.Errorf("create network: %w", err)
+		return &NetworkCreationError{err: err}
 	}
 
 	t.sendEvent(
