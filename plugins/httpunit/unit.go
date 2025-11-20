@@ -19,11 +19,13 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
-	"github.com/exapsy/ene/e2eframe"
 	"github.com/joho/godotenv"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"gopkg.in/yaml.v3"
+
+	"github.com/exapsy/ene/e2eframe"
+	"github.com/exapsy/ene/e2eframe/ui"
 )
 
 // UserFriendlyError interface for errors that can provide simplified messages
@@ -48,9 +50,17 @@ func (e *EnvFileLoadingError) Unwrap() error {
 	return e.err
 }
 
+type Logs *string
+
+func NewLogs(logs *string) Logs {
+	return Logs(logs)
+}
+
 type ContainerCreationError struct {
 	containerName string
 	err           error
+	logs          Logs
+	verbose       bool
 }
 
 func (e *ContainerCreationError) Error() string {
@@ -61,53 +71,90 @@ func (e *ContainerCreationError) UserFriendlyMessage() string {
 	errMsg := e.err.Error()
 	prefix := fmt.Sprintf("%s build failed", e.containerName)
 
+	var out strings.Builder
+
+	// Determine the main error message and suggestions
+	var mainError string
+	var suggestions []string
+
 	// Provide helpful hints for common errors
 	if strings.Contains(errMsg, "not found") && strings.Contains(errMsg, ".netrc") {
-		return fmt.Sprintf("%s: .netrc file not found\n"+
-			"  → Required for private Go modules\n"+
-			"  → Create .netrc in project root with credentials\n"+
-			"  → See project README for setup instructions", prefix)
-	}
-	if strings.Contains(errMsg, "not found") && (strings.Contains(errMsg, "go.mod") || strings.Contains(errMsg, "go.sum")) {
-		return fmt.Sprintf("%s: go.mod or go.sum not found\n"+
-			"  → Check Dockerfile context is set correctly\n"+
-			"  → Verify Dockerfile path in suite.yml", prefix)
-	}
-	if strings.Contains(errMsg, "exit code: 1") && strings.Contains(errMsg, "go mod download") {
-		return fmt.Sprintf("%s: go mod download failed\n"+
-			"  → Check .netrc file has valid credentials\n"+
-			"  → Verify network connectivity\n"+
-			"  → Try: docker system prune to clear build cache", prefix)
-	}
-	if strings.Contains(errMsg, "Dockerfile") && strings.Contains(errMsg, "not found") {
-		return fmt.Sprintf("%s: Dockerfile not found\n"+
-			"  → Check the dockerfile path in your suite.yml\n"+
-			"  → Path should be relative to the suite directory", prefix)
+		mainError = ".netrc file not found"
+		suggestions = []string{
+			"Required for private Go modules",
+			"Create .netrc in project root with credentials",
+			"See project README for setup instructions",
+		}
+	} else if strings.Contains(errMsg, "not found") && (strings.Contains(errMsg, "go.mod") || strings.Contains(errMsg, "go.sum")) {
+		mainError = "go.mod or go.sum not found"
+		suggestions = []string{
+			"Check Dockerfile context is set correctly",
+			"Verify Dockerfile path in suite.yml",
+		}
+	} else if strings.Contains(errMsg, "exit code: 1") && strings.Contains(errMsg, "go mod download") {
+		mainError = "go mod download failed"
+		suggestions = []string{
+			"Check .netrc file has valid credentials",
+			"Verify network connectivity",
+			"Try: docker system prune to clear build cache",
+		}
+	} else if strings.Contains(errMsg, "Dockerfile") && strings.Contains(errMsg, "not found") {
+		mainError = "Dockerfile not found"
+		suggestions = []string{
+			"Check the dockerfile path in your suite.yml",
+			"Path should be relative to the suite directory",
+		}
+	} else if strings.Contains(errMsg, "Cannot connect to the Docker daemon") {
+		// Docker daemon issues
+		mainError = "cannot connect to Docker"
+		suggestions = []string{
+			"Check if Docker is running",
+			"Try: colima start (macOS) / systemctl start docker (Linux)",
+		}
+	} else if strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "context deadline exceeded") {
+		// Build timeout or resource issues
+		mainError = "build timeout"
+		suggestions = []string{
+			"Build is taking too long",
+			"Check for network issues or large dependencies",
+			"Consider increasing startup_timeout in suite.yml",
+		}
+	} else {
+		// For other errors, show a truncated version
+		if len(errMsg) > 100 {
+			mainError = errMsg[:97] + "..."
+		} else {
+			mainError = errMsg
+		}
+		suggestions = []string{
+			"Check Docker logs for details",
+			"Try: docker system prune to clear cache",
+		}
 	}
 
-	// Docker daemon issues
-	if strings.Contains(errMsg, "Cannot connect to the Docker daemon") {
-		return fmt.Sprintf("%s: cannot connect to Docker\n"+
-			"  → Check if Docker is running\n"+
-			"  → Try: colima start (macOS) / systemctl start docker (Linux)", prefix)
+	// Build the error message
+	out.WriteString(prefix)
+	out.WriteString(": ")
+	out.WriteString(mainError)
+
+	// Add suggestions
+	for _, suggestion := range suggestions {
+		out.WriteString("\n  → ")
+		out.WriteString(suggestion)
 	}
 
-	// Build timeout or resource issues
-	if strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "context deadline exceeded") {
-		return fmt.Sprintf("%s: build timeout\n"+
-			"  → Build is taking too long\n"+
-			"  → Check for network issues or large dependencies\n"+
-			"  → Consider increasing startup_timeout in suite.yml", prefix)
+	// Add container logs if verbose mode is enabled
+	if e.verbose && e.logs != nil && *e.logs != "" {
+		logBoxConfig := ui.DefaultLogBoxConfig()
+		logBoxConfig.Title = "Container logs:"
+		logBoxConfig.Indent = 2 // Align with error icon
+		logBoxConfig.MaxWidth = 80
+		logBoxConfig.HighlightErrors = true
+
+		out.WriteString(ui.LogBox(*e.logs, logBoxConfig))
 	}
 
-	// For other errors, show a truncated version of the actual error
-	if len(errMsg) > 100 {
-		return fmt.Sprintf("%s: %s...\n"+
-			"  → Check Docker logs for details\n"+
-			"  → Try: docker system prune to clear cache", prefix, errMsg[:97])
-	}
-	return fmt.Sprintf("%s: %s\n"+
-		"  → Check Docker logs for details", prefix, errMsg)
+	return out.String()
 }
 
 func (e *ContainerCreationError) Unwrap() error {
@@ -183,12 +230,14 @@ type HTTPUnit struct {
 	endpoint        string
 	verbose         bool
 
-	// Performance optimizations
+	// Build optimization
 	buildSemaphore chan struct{}
 
-	// logging
-	logs    []string
-	logLock sync.Mutex
+	// Logs from the service
+	logs       []string
+	logLock    sync.Mutex
+	buildLogs  strings.Builder
+	buildMutex sync.Mutex
 }
 
 func init() {
@@ -395,14 +444,15 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 
 	logCapture := &httpLogConsumer{unit: s}
 
-	if opts.Debug {
-		buildLogWriter = os.Stdout
+	// Capture build logs for error reporting in verbose mode
+	if opts.Verbose || opts.Debug {
+		buildLogWriter = io.MultiWriter(os.Stdout, &s.buildLogs)
 		logConsumers = []testcontainers.LogConsumer{
 			&testcontainers.StdoutLogConsumer{},
 			logCapture,
 		}
 	} else {
-		buildLogWriter = io.Discard
+		buildLogWriter = &s.buildLogs
 		logConsumers = []testcontainers.LogConsumer{logCapture}
 	}
 
@@ -523,7 +573,72 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 		Started:          true,
 	})
 	if err != nil {
-		return &ContainerCreationError{containerName: s.name, err: err}
+		// Capture logs if verbose mode is enabled
+		var logs *string
+		if opts.Verbose {
+			s.buildMutex.Lock()
+			buildLogStr := s.buildLogs.String()
+			s.buildMutex.Unlock()
+
+			// Try to get container runtime logs if container was created
+			if cont != nil {
+				logReader, logErr := cont.Logs(ctx)
+				if logErr == nil && logReader != nil {
+					defer logReader.Close()
+					logBytes, readErr := io.ReadAll(logReader)
+					if readErr == nil && len(logBytes) > 0 {
+						if buildLogStr != "" {
+							buildLogStr += "\n"
+						}
+						buildLogStr += string(logBytes)
+					}
+				}
+			}
+
+			// If we don't have build logs, extract error details from the error message
+			if buildLogStr == "" {
+				// Parse the error message to extract useful information
+				errStr := err.Error()
+
+				// Look for common error patterns and extract the relevant parts
+				if strings.Contains(errStr, "process") && strings.Contains(errStr, "did not complete successfully") {
+					// Extract the command that failed
+					if idx := strings.Index(errStr, "process \""); idx != -1 {
+						cmdStart := idx + len("process \"")
+						if cmdEnd := strings.Index(errStr[cmdStart:], "\""); cmdEnd != -1 {
+							failedCmd := errStr[cmdStart : cmdStart+cmdEnd]
+							buildLogStr = fmt.Sprintf("Build command failed: %s\n", failedCmd)
+
+							// Look for exit code
+							if strings.Contains(errStr, "exit code:") {
+								if exitIdx := strings.Index(errStr, "exit code: "); exitIdx != -1 {
+									exitCode := errStr[exitIdx+len("exit code: "):]
+									if spaceIdx := strings.IndexAny(exitCode, " \n"); spaceIdx != -1 {
+										exitCode = exitCode[:spaceIdx]
+									}
+									buildLogStr += fmt.Sprintf("Exit code: %s\n", exitCode)
+								}
+							}
+						}
+					}
+				}
+
+				// If still no logs, use the error message itself as a fallback
+				if buildLogStr == "" {
+					buildLogStr = fmt.Sprintf("Error details:\n%s", errStr)
+				}
+			}
+
+			if buildLogStr != "" {
+				logs = &buildLogStr
+			}
+		}
+		return &ContainerCreationError{
+			containerName: s.name,
+			err:           err,
+			logs:          logs,
+			verbose:       opts.Verbose,
+		}
 	}
 
 	s.sendEvent(
@@ -853,6 +968,13 @@ func isSourceFile(ext string) bool {
 // stringPtr is a helper function to create a string pointer
 func stringPtr(s string) *string {
 	return &s
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // cleanupOldCachedImages removes old ene-prefixed images to prevent cache bloat
