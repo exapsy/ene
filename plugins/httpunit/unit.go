@@ -56,11 +56,16 @@ func NewLogs(logs *string) Logs {
 	return Logs(logs)
 }
 
+// ContainerCreationError represents a failure during container creation/build.
+// When this error occurs, detailed logs are automatically saved to a file in
+// .ene/logs/ directory for troubleshooting, and the file path is included in
+// the error message.
 type ContainerCreationError struct {
 	containerName string
 	err           error
 	logs          Logs
 	verbose       bool
+	logFilePath   string // Path to the saved error log file
 }
 
 func (e *ContainerCreationError) Error() string {
@@ -127,7 +132,8 @@ func (e *ContainerCreationError) UserFriendlyMessage() string {
 			mainError = errMsg
 		}
 		suggestions = []string{
-			"Check Docker logs for details",
+			"Check Docker daemon logs for full build output",
+			"Run with --debug to see build output in real-time",
 			"Try: docker system prune to clear cache",
 		}
 	}
@@ -141,6 +147,12 @@ func (e *ContainerCreationError) UserFriendlyMessage() string {
 	for _, suggestion := range suggestions {
 		out.WriteString("\n  → ")
 		out.WriteString(suggestion)
+	}
+
+	// Add log file location if available
+	if e.logFilePath != "" {
+		out.WriteString("\n  → Full logs saved to: ")
+		out.WriteString(e.logFilePath)
 	}
 
 	// Add container logs if verbose mode is enabled
@@ -238,6 +250,9 @@ type HTTPUnit struct {
 	logLock    sync.Mutex
 	buildLogs  strings.Builder
 	buildMutex sync.Mutex
+
+	// File path for error logs
+	errorLogFile string
 }
 
 func init() {
@@ -444,15 +459,38 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 
 	logCapture := &httpLogConsumer{unit: s}
 
+	// Create log file for capturing build output
+	logDir := filepath.Join(opts.WorkingDir, ".ene", "logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		fmt.Printf("Warning: failed to create log directory: %v\n", err)
+	}
+
+	timestamp := time.Now().Format("20060102-150405")
+	s.errorLogFile = filepath.Join(logDir, fmt.Sprintf("build-%s-%s.log", s.name, timestamp))
+	logFile, err := os.Create(s.errorLogFile)
+	if err != nil {
+		fmt.Printf("Warning: failed to create log file: %v\n", err)
+		logFile = nil
+	}
+
 	// Capture build logs for error reporting in verbose mode
 	if opts.Verbose || opts.Debug {
-		buildLogWriter = io.MultiWriter(os.Stdout, &s.buildLogs)
+		if logFile != nil {
+			buildLogWriter = io.MultiWriter(os.Stdout, &s.buildLogs, logFile)
+		} else {
+			buildLogWriter = io.MultiWriter(os.Stdout, &s.buildLogs)
+		}
 		logConsumers = []testcontainers.LogConsumer{
 			&testcontainers.StdoutLogConsumer{},
 			logCapture,
 		}
 	} else {
-		buildLogWriter = &s.buildLogs
+		if logFile != nil {
+			buildLogWriter = io.MultiWriter(&s.buildLogs, logFile)
+			defer logFile.Close()
+		} else {
+			buildLogWriter = &s.buildLogs
+		}
 		logConsumers = []testcontainers.LogConsumer{logCapture}
 	}
 
@@ -573,71 +611,113 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 		Started:          true,
 	})
 	if err != nil {
-		// Capture logs if verbose mode is enabled
-		var logs *string
-		if opts.Verbose {
-			s.buildMutex.Lock()
-			buildLogStr := s.buildLogs.String()
-			s.buildMutex.Unlock()
+		// Always write error information to log file for troubleshooting
+		s.buildMutex.Lock()
+		buildLogStr := s.buildLogs.String()
+		s.buildMutex.Unlock()
 
-			// Try to get container runtime logs if container was created
-			if cont != nil {
-				logReader, logErr := cont.Logs(ctx)
-				if logErr == nil && logReader != nil {
-					defer logReader.Close()
-					logBytes, readErr := io.ReadAll(logReader)
-					if readErr == nil && len(logBytes) > 0 {
+		// Try to get container runtime logs if container was created
+		if cont != nil {
+			logReader, logErr := cont.Logs(ctx)
+			if logErr == nil && logReader != nil {
+				defer logReader.Close()
+				logBytes, readErr := io.ReadAll(logReader)
+				if readErr == nil && len(logBytes) > 0 {
+					if buildLogStr != "" {
+						buildLogStr += "\n"
+					}
+					buildLogStr += string(logBytes)
+				}
+			}
+		}
+
+		// Extract detailed error information from the error message
+		errStr := err.Error()
+
+		// Look for Docker build error patterns that contain actual build output
+		if strings.Contains(errStr, "failed to build") || strings.Contains(errStr, "process") {
+			// Try to extract everything after "build image:" which often contains the full output
+			if idx := strings.Index(errStr, "build image:"); idx != -1 {
+				detailedError := errStr[idx+len("build image:"):]
+				detailedError = strings.TrimSpace(detailedError)
+
+				if detailedError != "" {
+					if buildLogStr != "" {
+						buildLogStr += "\n\n"
+					}
+					buildLogStr += detailedError
+				}
+			} else if strings.Contains(errStr, "process") && strings.Contains(errStr, "did not complete successfully") {
+				// Extract the command that failed
+				if idx := strings.Index(errStr, "process \""); idx != -1 {
+					cmdStart := idx + len("process \"")
+					if cmdEnd := strings.Index(errStr[cmdStart:], "\""); cmdEnd != -1 {
+						failedCmd := errStr[cmdStart : cmdStart+cmdEnd]
+						afterCmd := errStr[cmdStart+cmdEnd:]
+
 						if buildLogStr != "" {
 							buildLogStr += "\n"
 						}
-						buildLogStr += string(logBytes)
-					}
-				}
-			}
+						buildLogStr += fmt.Sprintf("Build command failed: %s\n", failedCmd)
 
-			// If we don't have build logs, extract error details from the error message
-			if buildLogStr == "" {
-				// Parse the error message to extract useful information
-				errStr := err.Error()
-
-				// Look for common error patterns and extract the relevant parts
-				if strings.Contains(errStr, "process") && strings.Contains(errStr, "did not complete successfully") {
-					// Extract the command that failed
-					if idx := strings.Index(errStr, "process \""); idx != -1 {
-						cmdStart := idx + len("process \"")
-						if cmdEnd := strings.Index(errStr[cmdStart:], "\""); cmdEnd != -1 {
-							failedCmd := errStr[cmdStart : cmdStart+cmdEnd]
-							buildLogStr = fmt.Sprintf("Build command failed: %s\n", failedCmd)
-
-							// Look for exit code
-							if strings.Contains(errStr, "exit code:") {
-								if exitIdx := strings.Index(errStr, "exit code: "); exitIdx != -1 {
-									exitCode := errStr[exitIdx+len("exit code: "):]
-									if spaceIdx := strings.IndexAny(exitCode, " \n"); spaceIdx != -1 {
-										exitCode = exitCode[:spaceIdx]
-									}
-									buildLogStr += fmt.Sprintf("Exit code: %s\n", exitCode)
+						// Look for exit code and extract surrounding context
+						if exitIdx := strings.Index(afterCmd, "exit status"); exitIdx != -1 {
+							remainingError := afterCmd[exitIdx:]
+							lines := strings.Split(remainingError, "\n")
+							for _, line := range lines {
+								trimmed := strings.TrimSpace(line)
+								if trimmed != "" {
+									buildLogStr += trimmed + "\n"
 								}
+							}
+						} else if strings.Contains(afterCmd, "exit code:") {
+							if exitIdx := strings.Index(afterCmd, "exit code: "); exitIdx != -1 {
+								exitCode := afterCmd[exitIdx+len("exit code: "):]
+								if spaceIdx := strings.IndexAny(exitCode, " \n"); spaceIdx != -1 {
+									exitCode = exitCode[:spaceIdx]
+								}
+								buildLogStr += fmt.Sprintf("Exit code: %s\n", exitCode)
 							}
 						}
 					}
 				}
-
-				// If still no logs, use the error message itself as a fallback
-				if buildLogStr == "" {
-					buildLogStr = fmt.Sprintf("Error details:\n%s", errStr)
-				}
 			}
+		}
 
+		// If still no meaningful logs, use the full error message as fallback
+		if buildLogStr == "" {
+			buildLogStr = errStr
+		}
+
+		// Write comprehensive error log to file
+		if s.errorLogFile != "" {
+			errorLogContent := fmt.Sprintf("=== Build Error Log ===\n")
+			errorLogContent += fmt.Sprintf("Container: %s\n", s.name)
+			errorLogContent += fmt.Sprintf("Timestamp: %s\n", time.Now().Format(time.RFC3339))
+			errorLogContent += fmt.Sprintf("Working Dir: %s\n", opts.WorkingDir)
+			errorLogContent += fmt.Sprintf("Dockerfile: %s\n", s.Dockerfile)
+			errorLogContent += fmt.Sprintf("\n=== Error ===\n%s\n", errStr)
+			errorLogContent += fmt.Sprintf("\n=== Build Output ===\n%s\n", buildLogStr)
+
+			if writeErr := os.WriteFile(s.errorLogFile, []byte(errorLogContent), 0644); writeErr != nil {
+				fmt.Printf("Warning: failed to write error log: %v\n", writeErr)
+			}
+		}
+
+		// Prepare logs for error display if verbose mode is enabled
+		var logs *string
+		if opts.Verbose {
 			if buildLogStr != "" {
 				logs = &buildLogStr
 			}
 		}
+
 		return &ContainerCreationError{
 			containerName: s.name,
 			err:           err,
 			logs:          logs,
 			verbose:       opts.Verbose,
+			logFilePath:   s.errorLogFile,
 		}
 	}
 

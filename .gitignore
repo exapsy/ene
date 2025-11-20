@@ -1,3 +1,6 @@
 # binaries & executables
 *.exe
 ene
+
+# ENE test framework logs
+.ene/
