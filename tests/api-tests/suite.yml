@@ -2,8 +2,7 @@ kind: e2e_test:v1
 name: api-tests
 
 fixtures:
-  - name: content_type_inline
-    value: application/json; charset=utf-8
+  - content_type_inline: "application/json; charset=utf-8"
 
 units:
   - name: mongodb
