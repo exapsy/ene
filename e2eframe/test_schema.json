@@ -207,6 +207,9 @@
               },
               {
                 "const": "minio"
+              },
+              {
+                "const": "postgres"
               }
             ]
           },
@@ -216,6 +219,10 @@
           },
           "timeout": {
             "type": "string"
+          },
+          "query": {
+            "type": "string",
+            "description": "SQL query to execute (postgres test only)"
           },
           "request": {
             "type": "object",
@@ -675,6 +682,55 @@
                     }
                   ]
                 }
+              },
+              "row_count": {
+                "type": "integer",
+                "description": "Expected exact number of rows returned by the query"
+              },
+              "min_row_count": {
+                "type": "integer",
+                "description": "Minimum number of rows expected"
+              },
+              "max_row_count": {
+                "type": "integer",
+                "description": "Maximum number of rows expected"
+              },
+              "no_rows": {
+                "type": "boolean",
+                "description": "Assert that the query returns no rows"
+              },
+              "table_exists": {
+                "type": "string",
+                "description": "Check if a table exists in the database"
+              },
+              "rows": {
+                "type": "array",
+                "description": "Expected exact row data",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "column_values": {
+                "type": "object",
+                "description": "Expected column values for single-row results",
+                "additionalProperties": true
+              },
+              "contains": {
+                "type": "array",
+                "description": "Assert that results contain these rows (partial match)",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "not_contains": {
+                "type": "array",
+                "description": "Assert that results do not contain these rows",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
               }
             }
           }
@@ -697,8 +753,29 @@
                   "required": ["name", "kind", "request", "expect"]
                 }
               ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "postgres"
+                }
+              }
             },
-            "else": {
+            "then": {
+              "required": ["name", "kind", "expect"]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "http"
+                }
+              }
+            },
+            "then": {
               "required": ["name", "kind", "request", "expect"]
             }
           }

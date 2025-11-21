@@ -168,3 +168,128 @@ func TestRunAgainstServer(t *testing.T) {
 		})
 	}
 }
+
+func TestRunWithVerboseMode(t *testing.T) {
+	// Create a real HTTP server
+	srv := stdhttptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Custom-Header", "test-value")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"status":"ok"}`)
+		}),
+	)
+	defer srv.Close()
+
+	ts := &httptestplugin.TestSuiteTest{
+		TestName:       "verbose-test",
+		TargetEndpoint: srv.URL,
+		Request: httptestplugin.TestSuiteTestRequest{
+			Path:    "/test",
+			Method:  http.MethodPost,
+			Timeout: "1s",
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+				"X-Test":       "header-value",
+			},
+			Body: `{"test":"data"}`,
+		},
+		Expect: httptestplugin.TestSuiteTestExpect{
+			StatusCode: http.StatusOK,
+		},
+	}
+
+	// Run with verbose mode enabled
+	res, err := ts.Run(context.Background(), &e2eframe.TestSuiteTestRunOptions{
+		Verbose: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, res.Passed)
+}
+
+func TestRunFailureIncludesRequestDetails(t *testing.T) {
+	// Create a server that returns 404
+	srv := stdhttptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Error-Code", "NOT_FOUND")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":"resource not found"}`)
+		}),
+	)
+	defer srv.Close()
+
+	ts := &httptestplugin.TestSuiteTest{
+		TestName:       "failure-test",
+		TargetEndpoint: srv.URL,
+		Request: httptestplugin.TestSuiteTestRequest{
+			Path:    "/api/users/123",
+			Method:  http.MethodGet,
+			Timeout: "1s",
+			Headers: map[string]string{
+				"Authorization": "Bearer test-token",
+				"Accept":        "application/json",
+			},
+			QueryParams: map[string]string{
+				"include": "profile",
+			},
+		},
+		Expect: httptestplugin.TestSuiteTestExpect{
+			StatusCode: http.StatusOK,
+		},
+	}
+
+	// Run the test - it should fail
+	res, err := ts.Run(context.Background(), &e2eframe.TestSuiteTestRunOptions{
+		Verbose: false,
+	})
+	require.NoError(t, err)
+	assert.False(t, res.Passed)
+
+	// Verify error message includes request details
+	assert.Contains(t, res.Message, "GET")
+	assert.Contains(t, res.Message, "/api/users/123")
+	assert.Contains(t, res.Message, "Authorization: Bearer test-token")
+	assert.Contains(t, res.Message, "Accept: application/json")
+	assert.Contains(t, res.Message, "include=profile")
+
+	// Verify error message includes response details
+	assert.Contains(t, res.Message, "Status: 404")
+	assert.Contains(t, res.Message, "X-Error-Code: NOT_FOUND")
+	assert.Contains(t, res.Message, `{"error":"resource not found"}`)
+	assert.Contains(t, res.Message, "=== Request Details ===")
+	assert.Contains(t, res.Message, "=== Response Details ===")
+}
+
+func TestRunRequestErrorIncludesDetails(t *testing.T) {
+	// Use an invalid URL that will cause request to fail
+	ts := &httptestplugin.TestSuiteTest{
+		TestName:       "request-error-test",
+		TargetEndpoint: "http://invalid-host-that-does-not-exist-12345.local",
+		Request: httptestplugin.TestSuiteTestRequest{
+			Path:    "/api/test",
+			Method:  http.MethodPost,
+			Timeout: "1s",
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+			Body: `{"foo":"bar"}`,
+		},
+		Expect: httptestplugin.TestSuiteTestExpect{
+			StatusCode: http.StatusOK,
+		},
+	}
+
+	// Run the test - it should fail with request error
+	res, err := ts.Run(context.Background(), &e2eframe.TestSuiteTestRunOptions{
+		Verbose: false,
+	})
+	require.NoError(t, err)
+	assert.False(t, res.Passed)
+
+	// Verify error message includes request details
+	assert.Contains(t, res.Message, "Request failed:")
+	assert.Contains(t, res.Message, "POST")
+	assert.Contains(t, res.Message, "/api/test")
+	assert.Contains(t, res.Message, "Content-Type: application/json")
+	assert.Contains(t, res.Message, `{"foo":"bar"}`)
+	assert.Contains(t, res.Message, "=== Request Details ===")
+}

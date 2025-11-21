@@ -359,7 +359,7 @@ ene completion powershell > ene.ps1
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--verbose` / `-v` | bool | false | Enable detailed logs including container output |
+| `--verbose` / `-v` | bool | false | Enable detailed logs including container output and HTTP request/response details |
 | `--pretty` | bool | true | Pretty print output with colors and formatting |
 | `--debug` | bool | false | Enable debug mode with extra diagnostic information |
 | `--parallel` | bool | false | Run test suites in parallel (faster but more resource-intensive) |
@@ -370,6 +370,72 @@ ene completion powershell > ene.ps1
 | `--cleanup-cache` | bool | false | Cleanup old cached Docker images to prevent bloat |
 | `--help` / `-h` | bool | false | Show help information |
 | `--version` | bool | false | Show version information |
+
+### Verbose Mode for HTTP Tests
+
+When `--verbose` is enabled, HTTP tests will display detailed request and response information:
+
+**Request Details:**
+- HTTP Method (GET, POST, etc.)
+- Full URL including query parameters
+- All request headers
+- Request body payload
+
+**Response Details:**
+- HTTP status code
+- All response headers
+- Response body content
+
+**Example Output:**
+```
+=== HTTP Request ===
+POST http://localhost:8080/api/users?include=profile
+Headers:
+  Content-Type: application/json
+  Authorization: Bearer test-token
+Body:
+{"name":"John Doe","email":"john@example.com"}
+====================
+
+=== HTTP Response ===
+Status: 201 Created
+Headers:
+  Content-Type: application/json
+  X-Request-Id: abc123
+Body:
+{"id":1,"name":"John Doe","email":"john@example.com"}
+=====================
+```
+
+**Failure Messages:**
+
+When an HTTP test fails, the error message automatically includes full request and response details, regardless of whether verbose mode is enabled. This ensures you have all the information needed to debug the failure:
+
+```
+expected status code 200, got 404
+
+=== Request Details ===
+GET http://localhost:8080/api/users/999?include=profile
+Headers:
+  Authorization: Bearer test-token
+  Accept: application/json
+========================
+
+=== Response Details ===
+Status: 404 Not Found
+Headers:
+  Content-Type: application/json
+Body:
+{"error":"User not found"}
+=========================
+```
+
+This is particularly useful for:
+- Debugging failing tests
+- Understanding API behavior
+- Verifying request/response formats
+- Troubleshooting authentication issues
+- Checking query parameter handling
 
 ### Suite Filtering
 
@@ -419,7 +485,7 @@ The `suite.yml` file defines the test suite configuration.
 kind: e2e_test:v1
 name: my-test-suite
 
-# Fixtures: Reusable data values
+# Fixtures: Reusable data values (both array and map formats work)
 fixtures:
   - content_type_inline: application/json; charset=utf-8
   - api_key: test-key-12345

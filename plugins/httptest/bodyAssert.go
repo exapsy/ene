@@ -8,9 +8,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/exapsy/ene/e2eframe"
 	"github.com/tidwall/gjson"
 	"gopkg.in/yaml.v3"
+
+	"github.com/exapsy/ene/e2eframe"
 )
 
 type TestBodyAssert struct {
@@ -463,16 +464,16 @@ func (e TestBodyAssert) testRoot(
 	notMatches string,
 ) (bool, error) {
 	if e.Present != nil && !*e.Present && len(body) > 0 {
-		return false, fmt.Errorf("expected body to not be present")
+		return true, fmt.Errorf("expected body to not be present")
 	}
 
 	if e.Present != nil && *e.Present && len(body) == 0 {
-		return false, fmt.Errorf("expected body to be present but its empty")
+		return true, fmt.Errorf("expected body to be present but its empty")
 	}
 
 	// Check if the response body is valid JSON before parsing
 	if !gjson.Valid(string(body)) {
-		return false, fmt.Errorf("response body is not valid JSON for root path assertion")
+		return true, fmt.Errorf("response body is not valid JSON for root path assertion")
 	}
 
 	gjsonResult := gjson.ParseBytes(body)
@@ -480,58 +481,58 @@ func (e TestBodyAssert) testRoot(
 	if matches != "" {
 		res, err := bodyMatches(matches, &gjsonResult)
 		if err != nil {
-			return false, fmt.Errorf("body does not match regex: %s, error: %w", matches, err)
+			return true, fmt.Errorf("body does not match regex: %s, error: %w", matches, err)
 		}
 
 		if !res {
-			return false, fmt.Errorf("body does not match regex: %s", matches)
+			return true, fmt.Errorf("body does not match regex: %s", matches)
 		}
 	}
 
 	if notMatches != "" {
 		res, err := bodyMatches(notMatches, &gjsonResult)
 		if err != nil {
-			return false, fmt.Errorf("body matches regex: %s, error: %w", notMatches, err)
+			return true, fmt.Errorf("body matches regex: %s, error: %w", notMatches, err)
 		}
 
 		if res {
-			return false, fmt.Errorf("body matches regex: %s", notMatches)
+			return true, fmt.Errorf("body matches regex: %s", notMatches)
 		}
 	}
 
 	if contains != "" && !strings.Contains(gjsonResult.String(), contains) {
-		return false, fmt.Errorf("body does not contain: %s", contains)
+		return true, fmt.Errorf("body does not contain: %s", contains)
 	}
 
 	if notContains != "" && strings.Contains(gjsonResult.String(), notContains) {
-		return false, fmt.Errorf("body contains: %s", notContains)
+		return true, fmt.Errorf("body contains: %s", notContains)
 	}
 
 	if equals != "" && gjsonResult.String() != equals {
-		return false, fmt.Errorf("body does not equal: %s", equals)
+		return true, fmt.Errorf("body does not equal: %s", equals)
 	}
 
 	if notEquals != "" && gjsonResult.String() == notEquals {
-		return false, fmt.Errorf("body equals: %s", notEquals)
+		return true, fmt.Errorf("body equals: %s", notEquals)
 	}
 
 	if e.Size != 0 {
 		switch gjsonResult.Type {
 		case gjson.String:
 			if len(gjsonResult.String()) != e.Size {
-				return false, fmt.Errorf("body size does not equal: %d", e.Size)
+				return true, fmt.Errorf("body size does not equal: %d", e.Size)
 			}
 		case gjson.JSON:
 			if gjsonResult.IsArray() {
 				arr := gjsonResult.Array()
 				if len(arr) != e.Size {
-					return false, fmt.Errorf("array size does not equal: %d", e.Size)
+					return true, fmt.Errorf("array size does not equal: %d", e.Size)
 				}
 			} else {
-				return false, fmt.Errorf("body is not an array")
+				return true, fmt.Errorf("body is not an array")
 			}
 		default:
-			return false, fmt.Errorf("body is not a string or array")
+			return true, fmt.Errorf("body is not a string or array")
 		}
 	}
 
@@ -539,10 +540,10 @@ func (e TestBodyAssert) testRoot(
 		switch gjsonResult.Type {
 		case gjson.Number:
 			if gjsonResult.Int() <= int64(e.GreaterThan) {
-				return false, fmt.Errorf("body is not greater than: %d", e.GreaterThan)
+				return true, fmt.Errorf("body is not greater than: %d", e.GreaterThan)
 			}
 		default:
-			return false, fmt.Errorf("body is not a number")
+			return true, fmt.Errorf("body is not a number")
 		}
 	}
 
@@ -550,10 +551,10 @@ func (e TestBodyAssert) testRoot(
 		switch gjsonResult.Type {
 		case gjson.Number:
 			if gjsonResult.Int() >= int64(e.LessThan) {
-				return false, fmt.Errorf("body is not less than: %d", e.LessThan)
+				return true, fmt.Errorf("body is not less than: %d", e.LessThan)
 			}
 		default:
-			return false, fmt.Errorf("body is not a number")
+			return true, fmt.Errorf("body is not a number")
 		}
 	}
 
@@ -561,32 +562,41 @@ func (e TestBodyAssert) testRoot(
 		switch gjsonResult.Type {
 		case gjson.String:
 			if e.Type != BodyFieldTypeString {
-				return false, fmt.Errorf("body is not a string")
+				return true, fmt.Errorf("body is not a string")
 			}
 		case gjson.Number:
 			if e.Type != BodyFieldTypeInt && e.Type != BodyFieldTypeFloat {
-				return false, fmt.Errorf("body is not a number")
+				return true, fmt.Errorf("body is not a number")
 			}
 
 			// gjson does not provide a way to check if a number is an integer or float
 			if e.Type == BodyFieldTypeInt && strings.Contains(gjsonResult.String(), ".") {
-				return false, fmt.Errorf("body is not an integer")
+				return true, fmt.Errorf("body is not an integer")
 			}
 
 			if e.Type == BodyFieldTypeFloat && !strings.Contains(gjsonResult.String(), ".") {
-				return false, fmt.Errorf("body is not a float")
+				return true, fmt.Errorf("body is not a float")
 			}
 		case gjson.JSON:
 			if e.Type != BodyFieldTypeArray && e.Type != BodyFieldTypeObject {
-				return false, fmt.Errorf("body is not an array or object")
+				return true, fmt.Errorf("body is not an array or object")
+			}
+			if e.Type == BodyFieldTypeArray && !gjsonResult.IsArray() {
+				return true, fmt.Errorf("body is not an array")
+			}
+			if e.Type == BodyFieldTypeArray && e.Size != len(gjsonResult.Array()) {
+				return true, fmt.Errorf("array size does not equal: %d", e.Size)
+			}
+			if e.Type == BodyFieldTypeObject && !gjsonResult.IsObject() {
+				return true, fmt.Errorf("body is not an object")
 			}
 		case gjson.Null:
 			if e.Present != nil && *e.Present {
-				return false, fmt.Errorf("expected body to be present but it is null")
+				return true, fmt.Errorf("expected body to be present but it is null")
 			}
 		case gjson.True, gjson.False:
 			if e.Type != BodyFieldTypeBool {
-				return false, fmt.Errorf("body is not a boolean")
+				return true, fmt.Errorf("body is not a boolean")
 			}
 		}
 	}

@@ -1,6 +1,7 @@
 package httptest
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -168,6 +169,12 @@ func (t *TestSuiteTest) Run(
 	headers := t.GetHeadersWithFixtures(opts.Fixtures)
 	queryParams := t.GetQueryParamsWithFixtures(opts.Fixtures)
 
+	// Read body content for logging
+	bodyBytes, err := io.ReadAll(body)
+	if err != nil {
+		return nil, fmt.Errorf("read body: %v", err)
+	}
+
 	// Build URL with query parameters
 	fullURL := fmt.Sprintf("%s%s", t.TargetEndpoint, path)
 	if len(queryParams) > 0 {
@@ -183,7 +190,24 @@ func (t *TestSuiteTest) Run(
 		fullURL = u.String()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, t.Request.Method, fullURL, body)
+	// Log request details in verbose mode
+	if opts.Verbose {
+		fmt.Printf("\n=== HTTP Request ===\n")
+		fmt.Printf("%s %s\n", t.Request.Method, fullURL)
+		if len(headers) > 0 {
+			fmt.Printf("Headers:\n")
+			for key, value := range headers {
+				fmt.Printf("  %s: %s\n", key, value)
+			}
+		}
+		if len(bodyBytes) > 0 {
+			fmt.Printf("Body:\n%s\n", string(bodyBytes))
+		}
+		fmt.Printf("====================\n\n")
+	}
+
+	// Create new body reader from bytes
+	req, err := http.NewRequestWithContext(ctx, t.Request.Method, fullURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("new request: %v", err)
 	}
@@ -203,15 +227,49 @@ func (t *TestSuiteTest) Run(
 
 	r, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("do request: %v", err)
+		errMsg := t.formatRequestError(fullURL, headers, bodyBytes, err)
+		return &e2eframe.TestResult{
+			TestName: t.TestName,
+			Message:  errMsg,
+			Err:      err,
+			Passed:   false,
+		}, nil
 	}
 
 	defer r.Body.Close()
 
+	// Read response body for logging and assertions
+	responseBodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %v", err)
+	}
+
+	// Log response details in verbose mode
+	if opts.Verbose {
+		fmt.Printf("=== HTTP Response ===\n")
+		fmt.Printf("Status: %d %s\n", r.StatusCode, http.StatusText(r.StatusCode))
+		if len(r.Header) > 0 {
+			fmt.Printf("Headers:\n")
+			for key, values := range r.Header {
+				for _, value := range values {
+					fmt.Printf("  %s: %s\n", key, value)
+				}
+			}
+		}
+		if len(responseBodyBytes) > 0 {
+			fmt.Printf("Body:\n%s\n", string(responseBodyBytes))
+		}
+		fmt.Printf("=====================\n\n")
+	}
+
+	// Replace response body with buffered version for assertions
+	r.Body = io.NopCloser(bytes.NewReader(responseBodyBytes))
+
 	if err := t.testResult(r, opts); err != nil {
+		errMsg := t.formatTestFailureError(fullURL, headers, bodyBytes, r.StatusCode, r.Header, responseBodyBytes, err)
 		return &e2eframe.TestResult{
 			TestName: t.TestName,
-			Message:  err.Error(),
+			Message:  errMsg,
 			Err:      err,
 			Passed:   false,
 		}, nil
@@ -367,6 +425,72 @@ func (t *TestSuiteTest) testResult(r *http.Response, opts *e2eframe.TestSuiteTes
 	}
 
 	return nil
+}
+
+// formatRequestError formats an error message with full request details
+func (t *TestSuiteTest) formatRequestError(
+	url string,
+	headers map[string]string,
+	body []byte,
+	err error,
+) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Request failed: %v\n\n", err))
+	sb.WriteString("=== Request Details ===\n")
+	sb.WriteString(fmt.Sprintf("%s %s\n", t.Request.Method, url))
+	if len(headers) > 0 {
+		sb.WriteString("Headers:\n")
+		for key, value := range headers {
+			sb.WriteString(fmt.Sprintf("  %s: %s\n", key, value))
+		}
+	}
+	if len(body) > 0 {
+		sb.WriteString(fmt.Sprintf("Body:\n%s\n", string(body)))
+	}
+	sb.WriteString("=======================")
+	return sb.String()
+}
+
+// formatTestFailureError formats an error message with full request and response details
+func (t *TestSuiteTest) formatTestFailureError(
+	url string,
+	requestHeaders map[string]string,
+	requestBody []byte,
+	statusCode int,
+	responseHeaders http.Header,
+	responseBody []byte,
+	err error,
+) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%v\n\n", err))
+
+	sb.WriteString("=== Request Details ===\n")
+	sb.WriteString(fmt.Sprintf("%s %s\n", t.Request.Method, url))
+	if len(requestHeaders) > 0 {
+		sb.WriteString("Headers:\n")
+		for key, value := range requestHeaders {
+			sb.WriteString(fmt.Sprintf("  %s: %s\n", key, value))
+		}
+	}
+	if len(requestBody) > 0 {
+		sb.WriteString(fmt.Sprintf("Body:\n%s\n", string(requestBody)))
+	}
+
+	sb.WriteString("\n=== Response Details ===\n")
+	sb.WriteString(fmt.Sprintf("Status: %d %s\n", statusCode, http.StatusText(statusCode)))
+	if len(responseHeaders) > 0 {
+		sb.WriteString("Headers:\n")
+		for key, values := range responseHeaders {
+			for _, value := range values {
+				sb.WriteString(fmt.Sprintf("  %s: %s\n", key, value))
+			}
+		}
+	}
+	if len(responseBody) > 0 {
+		sb.WriteString(fmt.Sprintf("Body:\n%s\n", string(responseBody)))
+	}
+	sb.WriteString("========================")
+	return sb.String()
 }
 
 func init() {
