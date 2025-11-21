@@ -728,33 +728,6 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 	// Stop all units
 	// Remove networks
 	defer func() {
-		// Send suite finished event BEFORE cleanup so no extra lines are printed after
-		totalTime := time.Since(suiteStartTime)
-		setupTime := time.Duration(0)
-		if !setupEndTime.IsZero() {
-			setupTime = setupEndTime.Sub(suiteStartTime)
-		}
-
-		if opts.EventSink != nil {
-			opts.EventSink <- &SuiteFinishedEvent{
-				BaseEvent: BaseEvent{
-					EventType:    EventSuiteFinished,
-					EventTime:    time.Now(),
-					Suite:        t.TestName,
-					EventMessage: fmt.Sprintf("Suite %s completed", t.TestName),
-				},
-				SetupTime:    setupTime,
-				TestTime:     totalTestTime,
-				TotalTime:    totalTime,
-				PassedCount:  passedTests,
-				FailedCount:  failedTests,
-				SkippedCount: skippedTests,
-			}
-		}
-
-		// Small delay to ensure event is processed before cleanup messages
-		time.Sleep(10 * time.Millisecond)
-
 		// Notify that cleanup is starting
 		t.sendEvent(
 			opts.EventSink,
@@ -770,9 +743,8 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 			t.sendEvent(
 				opts.EventSink,
 				EventWarning,
-				fmt.Sprintf("CleanupRegistry errors: %v", err),
+				fmt.Sprintf("Some resources failed to cleanup: %v", err),
 			)
-			fmt.Printf("Warning: Some resources failed to cleanup: %v\n", err)
 		} else {
 			t.sendEvent(
 				opts.EventSink,
@@ -831,8 +803,11 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		if err := ForceCleanupNetwork(ctx, net); err != nil {
 			// Only log if it's a real error, not "network not found"
 			if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "No such network") {
-				fmt.Printf("\nWarning: Fallback network cleanup failed: %v\n", err)
-				fmt.Printf("To manually cleanup, run: docker network rm %s\n", net.Name)
+				t.sendEvent(
+					opts.EventSink,
+					EventWarning,
+					fmt.Sprintf("Fallback network cleanup failed: %v. To manually cleanup, run: docker network rm %s", err, net.Name),
+				)
 			}
 		}
 	}()
@@ -890,6 +865,7 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 				testErr.Error(),
 				time.Duration(0),
 				testErr,
+				nil,
 			)
 
 			return fmt.Errorf("run test %s: %w", test.Name(), testErr)
@@ -902,7 +878,7 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 				failedTests++
 
 				// Capture container logs from all units that support it
-				t.captureLogsOnFailure(opts, result.TestName, result.MessageOrErr())
+				logPaths := t.captureLogsOnFailure(opts, result.TestName, result.MessageOrErr())
 
 				t.sendTestEvent(
 					opts.EventSink,
@@ -911,9 +887,11 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 					result.MessageOrErr(),
 					result.Duration,
 					result.Err,
+					logPaths,
 				)
 
-				return nil
+				// Don't return early - continue to next test
+				// The suite will finish naturally after all tests
 			} else {
 				passedTests++
 				t.sendTestEvent(
@@ -922,6 +900,7 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 					true,
 					"",
 					result.Duration,
+					nil,
 					nil,
 				)
 			}
@@ -938,12 +917,36 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		return fmt.Errorf("run after all tests script: %w", err)
 	}
 
+	// Send suite finished event AFTER all tests complete but BEFORE cleanup
+	totalTime := time.Since(suiteStartTime)
+	setupTime := time.Duration(0)
+	if !setupEndTime.IsZero() {
+		setupTime = setupEndTime.Sub(suiteStartTime)
+	}
+
+	if opts.EventSink != nil {
+		opts.EventSink <- &SuiteFinishedEvent{
+			BaseEvent: BaseEvent{
+				EventType:    EventSuiteFinished,
+				EventTime:    time.Now(),
+				Suite:        t.TestName,
+				EventMessage: fmt.Sprintf("Suite %s completed", t.TestName),
+			},
+			SetupTime:    setupTime,
+			TestTime:     totalTestTime,
+			TotalTime:    totalTime,
+			PassedCount:  passedTests,
+			FailedCount:  failedTests,
+			SkippedCount: skippedTests,
+		}
+	}
+
 	return nil
 }
 
 // captureLogsOnFailure saves runtime logs from all units that support log capture
-// when a test fails. This helps with debugging test failures.
-func (t *TestSuiteV1) captureLogsOnFailure(opts *RunTestOptions, testName, failureReason string) {
+// when a test fails. Returns the paths to the saved log files.
+func (t *TestSuiteV1) captureLogsOnFailure(opts *RunTestOptions, testName, failureReason string) []string {
 	reason := fmt.Sprintf("Test '%s' failed: %s", testName, failureReason)
 
 	var savedLogPaths []string
@@ -953,20 +956,22 @@ func (t *TestSuiteV1) captureLogsOnFailure(opts *RunTestOptions, testName, failu
 		if logSaver, ok := unit.(LogSaver); ok {
 			logPath, err := logSaver.SaveRuntimeLogs(t.TestName, reason)
 			if err != nil {
-				fmt.Printf("Warning: failed to save logs for unit %s: %v\n", unit.Name(), err)
+				// Send warning through event system instead of direct print
+				if opts.EventSink != nil {
+					opts.EventSink <- &BaseEvent{
+						EventType:    EventWarning,
+						EventTime:    time.Now(),
+						Suite:        t.TestName,
+						EventMessage: fmt.Sprintf("failed to save logs for unit %s: %v", unit.Name(), err),
+					}
+				}
 			} else {
 				savedLogPaths = append(savedLogPaths, logPath)
 			}
 		}
 	}
 
-	// Notify user about saved logs
-	if len(savedLogPaths) > 0 {
-		fmt.Printf("  📋 Container logs saved for debugging:\n")
-		for _, path := range savedLogPaths {
-			fmt.Printf("     • %s\n", path)
-		}
-	}
+	return savedLogPaths
 }
 
 func (t *TestSuiteV1) sendTestRetryEvent(
@@ -1008,6 +1013,7 @@ func (t *TestSuiteV1) sendTestEvent(
 	message string,
 	duration time.Duration,
 	err error,
+	logPaths []string,
 ) {
 	if eventSink != nil {
 		eventSink <- &TestEvent{
@@ -1021,6 +1027,7 @@ func (t *TestSuiteV1) sendTestEvent(
 			Passed:   passed,
 			Error:    err,
 			Duration: duration,
+			LogPaths: logPaths,
 		}
 	}
 }

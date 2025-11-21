@@ -47,6 +47,9 @@ type Renderer interface {
 	// RenderSummary renders the final summary
 	RenderSummary(summary Summary) error
 
+	// RenderWarning renders a warning message
+	RenderWarning(message string) error
+
 	// ClearSpinner clears any active spinner (used before showing errors)
 	ClearSpinner()
 
@@ -91,6 +94,7 @@ type TestInfo struct {
 	ErrorMessage string
 	RetryCount   int
 	MaxRetries   int
+	LogPaths     []string // Paths to saved log files (for failed tests)
 }
 
 // Summary contains the final test run summary

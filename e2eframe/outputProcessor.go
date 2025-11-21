@@ -192,6 +192,7 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 				Duration:     testEvent.Duration,
 				ErrorMessage: errorMsg,
 				RetryCount:   0, // Will be set if there were retries
+				LogPaths:     testEvent.LogPaths,
 			}
 			return p.renderer.RenderTestCompleted(testInfo)
 		}
@@ -239,6 +240,14 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 			msg := baseEvent.Message()
 			if msg != "" {
 				p.renderer.RenderTransition(msg)
+			}
+		}
+
+	case EventWarning:
+		if baseEvent, ok := event.(*BaseEvent); ok {
+			msg := baseEvent.Message()
+			if msg != "" {
+				return p.renderer.RenderWarning(msg)
 			}
 		}
 
@@ -320,9 +329,10 @@ func (p *StdoutHumanOutputProcessor) Flush() error {
 		failedInfos[i] = ui.TestInfo{
 			SuiteName:    test.SuiteName(),
 			Name:         test.TestName,
-			Passed:       false,
+			Passed:       test.Passed,
 			Duration:     test.Duration,
 			ErrorMessage: errorMsg,
+			LogPaths:     test.LogPaths,
 		}
 	}
 

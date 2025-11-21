@@ -80,6 +80,7 @@ type TestEvent struct {
 	Passed   bool
 	Error    error
 	Duration time.Duration
+	LogPaths []string // Paths to saved log files (for failed tests)
 }
 
 func (te *TestEvent) Unwrap() error {

@@ -176,11 +176,10 @@ func (r *ModernRenderer) RenderSuiteFinished(suite SuiteFinishedInfo) error {
 		updatedLine := fmt.Sprintf("%s%s%s%s%s%s%s%s",
 			c.Cyan, progress, c.Reset, c.Bold, c.White, suite.Name, c.Reset, timingInfo)
 
-		r.write(updatedLine)
+		r.write(updatedLine + "\n")
 
 		// Move cursor back down past the header and all content
-		r.write(fmt.Sprintf("\033[%dB", r.linesAfterHeader+1))
-		r.write("\r")
+		r.write(fmt.Sprintf("\033[%dB", r.linesAfterHeader))
 
 		return nil
 	}
@@ -464,10 +463,54 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 		retryInfo,
 		errorIndent)
 
+	if err := r.write(line); err != nil {
+		return err
+	}
+
 	// Count lines: 1 for test line + error lines
 	r.linesAfterHeader += 1 + errorLineCount
 
-	return r.write(line)
+	// Display saved log paths if any
+	if len(test.LogPaths) > 0 {
+		logHeader := fmt.Sprintf("  %s📋%s Container logs saved for debugging:\n",
+			c.Blue, c.Reset)
+		if err := r.write(logHeader); err != nil {
+			return err
+		}
+		r.linesAfterHeader++
+
+		for _, logPath := range test.LogPaths {
+			logLine := fmt.Sprintf("     %s•%s %s\n",
+				c.Dim+c.Gray, c.Reset, logPath)
+			if err := r.write(logLine); err != nil {
+				return err
+			}
+			r.linesAfterHeader++
+		}
+	}
+
+	return nil
+}
+
+// RenderWarning renders a warning message with proper formatting
+func (r *ModernRenderer) RenderWarning(message string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Clear any active spinner first
+	if r.spinnerActive {
+		r.stopSpinnerLocked()
+	}
+
+	c := r.colors
+	warningLine := fmt.Sprintf("  %s⚠%s  %s\n", c.Yellow, c.Reset, message)
+
+	if err := r.write(warningLine); err != nil {
+		return err
+	}
+	r.linesAfterHeader++
+
+	return nil
 }
 
 // RenderTransition renders an ephemeral transition state with a spinner
