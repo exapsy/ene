@@ -54,6 +54,7 @@ type TestSuiteConfigV1 struct {
 	Units          []Unit          `yaml:"units"`
 	Tests          []TestSuiteTest `yaml:"tests"`
 	TestTargetName string          `yaml:"target"`
+	Debug          bool            `yaml:"debug,omitempty"`
 	RelativePath   string
 }
 
@@ -82,6 +83,10 @@ func (t *TestSuiteConfigV1) UnmarshalYAML(node *yaml.Node) error {
 			}
 		case "kind":
 			if err := value.Decode(&t.TestKind); err != nil {
+				return err
+			}
+		case "debug":
+			if err := value.Decode(&t.Debug); err != nil {
 				return err
 			}
 		case "fixtures":
@@ -307,6 +312,7 @@ func (t *TestSuiteConfigV1) CreateTestSuite(params CreateSuiteParams) (TestSuite
 		TestUnits:      t.Units,
 		TestSuiteTests: t.Tests,
 		TestTarget:     target,
+		Debug:          t.Debug,
 	}
 
 	return testSuite, nil

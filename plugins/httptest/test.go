@@ -51,6 +51,7 @@ type TestSuiteTest struct {
 	TestName       string
 	TestKind       string
 	TestTarget     string // Optional: override suite-level target
+	Debug          bool   // Optional: enable debug output for this test
 	Request        TestSuiteTestRequest
 	Expect         TestSuiteTestExpect
 	TargetEndpoint string
@@ -190,8 +191,8 @@ func (t *TestSuiteTest) Run(
 		fullURL = u.String()
 	}
 
-	// Log request details in verbose mode
-	if opts.Verbose {
+	// Log request details in verbose or debug mode
+	if opts.Verbose || opts.Debug || t.Debug {
 		fmt.Printf("\n=== HTTP Request ===\n")
 		fmt.Printf("%s %s\n", t.Request.Method, fullURL)
 		if len(headers) > 0 {
@@ -244,8 +245,8 @@ func (t *TestSuiteTest) Run(
 		return nil, fmt.Errorf("read response body: %v", err)
 	}
 
-	// Log response details in verbose mode
-	if opts.Verbose {
+	// Log response details in verbose or debug mode
+	if opts.Verbose || opts.Debug || t.Debug {
 		fmt.Printf("=== HTTP Response ===\n")
 		fmt.Printf("Status: %d %s\n", r.StatusCode, http.StatusText(r.StatusCode))
 		if len(r.Header) > 0 {
@@ -302,6 +303,10 @@ func (t *TestSuiteTest) UnmarshalYAML(node *yaml.Node) error {
 			}
 		case "target":
 			if err := value.Decode(&t.TestTarget); err != nil {
+				return err
+			}
+		case "debug":
+			if err := value.Decode(&t.Debug); err != nil {
 				return err
 			}
 		case "request":

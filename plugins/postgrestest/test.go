@@ -19,6 +19,8 @@ const (
 type TestSuiteTest struct {
 	TestName         string
 	TestKind         string
+	TestTarget       string                `yaml:"target"` // Optional: override suite-level target
+	Debug            bool                  `yaml:"debug"`  // Optional: enable debug output for this test
 	Query            string                `yaml:"query"`
 	Expect           *PostgresExpectations `yaml:"expect"`
 	PostgresEndpoint string
@@ -61,16 +63,36 @@ func (t *TestSuiteTest) Kind() string {
 func (t *TestSuiteTest) Initialize(testSuite e2eframe.TestSuite) error {
 	t.testSuite = testSuite
 
-	// Find the target unit and get Postgres connection details
-	target := testSuite.Target()
+	var target e2eframe.Unit
+
+	// Use per-test target if specified, otherwise use suite-level target
+	if t.TestTarget != "" {
+		// Find the target unit in the test suite
+		units := testSuite.Units()
+		found := false
+		for _, unit := range units {
+			if unit.Name() == t.TestTarget {
+				target = unit
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("target unit '%s' not found in suite", t.TestTarget)
+		}
+	} else {
+		target = testSuite.Target()
+	}
+
+	// Target is required
 	if target == nil {
-		return fmt.Errorf("target unit not found")
+		return fmt.Errorf("target unit not found (hint: set 'target' at suite level or test level)")
 	}
 
 	// Get Postgres connection details from the target unit
 	dsn, err := target.Get("dsn")
 	if err != nil {
-		return fmt.Errorf("failed to get postgres DSN: %w", err)
+		return fmt.Errorf("failed to get postgres DSN from unit '%s': %w (hint: target must be a postgres unit)", target.Name(), err)
 	}
 	t.PostgresEndpoint = dsn
 
@@ -186,8 +208,8 @@ func (t *TestSuiteTest) runExpectations(ctx context.Context, db *sql.DB, opts *e
 		}
 	}
 
-	// Log query in verbose mode
-	if opts != nil && opts.Verbose {
+	// Log query in verbose or debug mode
+	if opts != nil && (opts.Verbose || opts.Debug || t.Debug) {
 		fmt.Printf("\n=== Postgres Query ===\n")
 		fmt.Printf("%s\n", query)
 		fmt.Printf("======================\n\n")
@@ -237,8 +259,8 @@ func (t *TestSuiteTest) runExpectations(ctx context.Context, db *sql.DB, opts *e
 		return fmt.Errorf("error iterating rows: %w", err)
 	}
 
-	// Log results in verbose mode
-	if opts != nil && opts.Verbose {
+	// Log results in verbose or debug mode
+	if opts != nil && (opts.Verbose || opts.Debug || t.Debug) {
 		fmt.Printf("=== Query Results ===\n")
 		fmt.Printf("Row count: %d\n", len(results))
 		if len(results) > 0 {
@@ -587,6 +609,14 @@ func (t *TestSuiteTest) UnmarshalYAML(node *yaml.Node) error {
 		case "kind":
 			if err := value.Decode(&t.TestKind); err != nil {
 				return fmt.Errorf("failed to decode test kind: %w", err)
+			}
+		case "target":
+			if err := value.Decode(&t.TestTarget); err != nil {
+				return fmt.Errorf("failed to decode target: %w", err)
+			}
+		case "debug":
+			if err := value.Decode(&t.Debug); err != nil {
+				return fmt.Errorf("failed to decode debug: %w", err)
 			}
 		case "query":
 			if err := value.Decode(&t.Query); err != nil {

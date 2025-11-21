@@ -157,8 +157,10 @@ func (t TestResult) Error() string {
 }
 
 type TestSuiteTestRunOptions struct {
-	// Verbose enables verbose output
+	// Verbose enables verbose output (CLI override)
 	Verbose bool
+	// Debug enables debug output (from suite or test config)
+	Debug bool
 	// Fixtures contains fixtures that can be used in the test
 	Fixtures []Fixture
 	// Relative path to the test file, used for error reporting
@@ -322,6 +324,7 @@ type TestSuiteV1 struct {
 	TestUnits      []Unit
 	TestTarget     Unit
 	TestSuiteTests []TestSuiteTest
+	Debug          bool   // Suite-level debug flag
 	RelativePath   string // Relative path to the test suite file
 	WorkingDir     string // Working directory for the test suite, used for relative paths
 
@@ -387,6 +390,7 @@ func (t *TestSuiteV1) runTest(
 	startTime := time.Now()
 	result, err := test.Run(ctx, &TestSuiteTestRunOptions{
 		Verbose:      opts.Verbose,
+		Debug:        t.Debug, // Pass suite-level debug flag
 		Fixtures:     t.Fixtures,
 		RelativePath: t.RelativePath,
 	})

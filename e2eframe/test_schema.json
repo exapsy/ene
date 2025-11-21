@@ -9,6 +9,10 @@
     "name": {
       "type": "string"
     },
+    "debug": {
+      "type": "boolean",
+      "description": "Enable debug output for all tests in this suite"
+    },
     "fixtures": {
       "type": "array",
       "items": {
@@ -216,6 +220,10 @@
           "target": {
             "type": "string",
             "description": "Override suite-level target. Specifies which unit to send requests to for this test."
+          },
+          "debug": {
+            "type": "boolean",
+            "description": "Enable debug output for this specific test (overrides suite-level debug)"
           },
           "timeout": {
             "type": "string"

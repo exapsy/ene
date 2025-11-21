@@ -586,6 +586,36 @@ func indexOfSubstring(s, substr string) int {
 	return -1
 }
 
+func TestPerTestTarget(t *testing.T) {
+	yamlContent := `
+name: "test with target override"
+kind: postgres
+target: mydb
+query: "SELECT * FROM users"
+expect:
+  row_count: 5
+`
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(yamlContent), &node); err != nil {
+		t.Fatalf("failed to unmarshal yaml: %v", err)
+	}
+
+	if node.Kind != yaml.DocumentNode || len(node.Content) == 0 {
+		t.Fatalf("expected document node with content")
+	}
+
+	test := &TestSuiteTest{}
+	err := test.UnmarshalYAML(node.Content[0])
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if test.TestTarget != "mydb" {
+		t.Errorf("expected target 'mydb', got '%s'", test.TestTarget)
+	}
+}
+
 func TestFixtureInterpolation(t *testing.T) {
 	test := &TestSuiteTest{}
 
