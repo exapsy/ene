@@ -191,46 +191,98 @@ func validateTestSuiteSchema(file *os.File, path string) error {
 	return nil
 }
 
-func LoadTestSuites(baseDir string) ([]TestSuite, error) {
-	if baseDir == "" {
-		baseDir, _ = os.Getwd() // Get current working directory if no baseDir is provided
+// DiscoverTestSuites finds all suite.yml files starting from the given path.
+// It handles multiple cases:
+// 1. If path points to a suite.yml file directly -> return that file
+// 2. If path is a directory containing suite.yml -> return that file
+// 3. If path is a directory without suite.yml -> recursively search for suite.yml files
+// 4. For backwards compatibility: if path/tests/ exists, search from there instead
+func DiscoverTestSuites(path string) ([]string, error) {
+	if path == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get current directory: %w", err)
+		}
+		path = cwd
 	}
 
-	testsDirPath := filepath.Join(baseDir, TestsDir)
+	// Make path absolute for consistent handling
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve absolute path: %w", err)
+	}
 
-	testsDir, err := os.ReadDir(testsDirPath)
+	// Case 1: Path points to a suite.yml file directly
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat path %s: %w", absPath, err)
+	}
+
+	if !info.IsDir() {
+		// It's a file - check if it's a suite.yml
+		if filepath.Base(absPath) == SuiteYamlFile {
+			return []string{absPath}, nil
+		}
+		return nil, fmt.Errorf("path %s is not a %s file", absPath, SuiteYamlFile)
+	}
+
+	// Case 2: Directory containing suite.yml directly
+	directSuitePath := filepath.Join(absPath, SuiteYamlFile)
+	if _, err := os.Stat(directSuitePath); err == nil {
+		return []string{directSuitePath}, nil
+	}
+
+	// Case 3 & 4: Directory - search recursively
+	// For backwards compatibility, if /tests subdirectory exists, search from there
+	searchPath := absPath
+	testsSubdir := filepath.Join(absPath, "tests")
+	if info, err := os.Stat(testsSubdir); err == nil && info.IsDir() {
+		searchPath = testsSubdir
+	}
+
+	// Recursively find all suite.yml files
+	var suiteFiles []string
+	err = filepath.WalkDir(searchPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip hidden directories
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
+			return filepath.SkipDir
+		}
+
+		if !d.IsDir() && d.Name() == SuiteYamlFile {
+			suiteFiles = append(suiteFiles, path)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to search for test suites: %w", err)
+	}
+
+	if len(suiteFiles) == 0 {
+		return nil, fmt.Errorf("no test suites found in %s", searchPath)
+	}
+
+	return suiteFiles, nil
+}
+
+func LoadTestSuites(baseDir string) ([]TestSuite, error) {
+	suiteFiles, err := DiscoverTestSuites(baseDir)
 	if err != nil {
 		return nil, err
 	}
 
 	var testSuites []TestSuite
-
-	for _, testDir := range testsDir {
-		testDirPath := filepath.Join(testsDirPath, testDir.Name())
-
-		testFiles, err := os.ReadDir(testDirPath)
+	for _, suiteFile := range suiteFiles {
+		testSuite, err := LoadTestSuite(suiteFile)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to load test suite from %s: %w", suiteFile, err)
 		}
-
-		for _, testFile := range testFiles {
-			if testFile.IsDir() {
-				continue
-			}
-
-			if testFile.Name() != SuiteYamlFile {
-				continue
-			}
-
-			testFilePath := filepath.Join(testDirPath, testFile.Name())
-
-			testSuite, err := LoadTestSuite(testFilePath)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load test suite from %s: %w", testFilePath, err)
-			}
-
-			testSuites = append(testSuites, testSuite)
-		}
+		testSuites = append(testSuites, testSuite)
 	}
 
 	return testSuites, nil
@@ -267,34 +319,15 @@ func CountFilteredTestSuites(baseDir string, filterFunc func(suiteName, testName
 
 // ListTestSuiteNames returns a list of test suite names from the test directory
 func ListTestSuiteNames(baseDir string) ([]string, error) {
-	if baseDir == "" {
-		baseDir, _ = os.Getwd() // Get current working directory if no baseDir is provided
-	}
-
-	testsDirPath := filepath.Join(baseDir, TestsDir)
-
-	testsDir, err := os.ReadDir(testsDirPath)
+	suiteFiles, err := DiscoverTestSuites(baseDir)
 	if err != nil {
 		return nil, err
 	}
 
 	var suiteNames []string
-
-	for _, testDir := range testsDir {
-		if !testDir.IsDir() {
-			continue
-		}
-
-		testDirPath := filepath.Join(testsDirPath, testDir.Name())
-		suiteFilePath := filepath.Join(testDirPath, SuiteYamlFile)
-
-		// Check if suite.yml exists in this directory
-		if _, err := os.Stat(suiteFilePath); os.IsNotExist(err) {
-			continue
-		}
-
+	for _, suiteFile := range suiteFiles {
 		// Load the suite to get its name from the YAML
-		testSuite, err := LoadTestSuite(suiteFilePath)
+		testSuite, err := LoadTestSuite(suiteFile)
 		if err != nil {
 			// If we can't load the suite, skip it but don't fail entirely
 			continue
