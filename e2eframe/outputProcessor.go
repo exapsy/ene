@@ -150,7 +150,7 @@ func (p *StdoutHumanOutputProcessor) ConsumeEvent(event Event) error {
 			return p.renderer.RenderContainerStarting(containerInfo)
 		}
 
-	case EventContainerHealthy:
+	case EventContainerReady:
 		if unitEvent, ok := event.(*UnitEvent); ok {
 			containerInfo := ui.ContainerInfo{
 				Name:     unitEvent.UnitName,

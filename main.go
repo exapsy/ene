@@ -91,8 +91,9 @@ var rootCmd = &cobra.Command{
 		var eventSink e2eframe.EventSink = eventChan
 
 		// Use optimized defaults for better performance
-		maxRetries := 3       // Keep reliable retry behavior
-		isCleanupCache = true // Always cleanup for better performance
+		maxRetries := 3 // Keep reliable retry behavior
+		// Default to keeping cached images for faster rebuilds
+		// Only cleanup when explicitly requested via --cleanup-cache flag
 
 		// Set up signal handling for graceful shutdown
 		ctx, cancel := context.WithCancel(context.Background())

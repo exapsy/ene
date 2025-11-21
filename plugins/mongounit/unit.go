@@ -169,18 +169,14 @@ func (m *MongoUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) 
 		opts.CleanupRegistry.Register(cleanableContainer)
 	}
 
-	// Emit started event
-	m.sendEvent(opts.EventSink, e2eframe.EventContainerStarted,
-		fmt.Sprintf("MongoDB container %s started", m.serviceName))
-
 	// Wait for MongoDB to be ready before running migrations
 	if err := m.waitForMongoDB(ctx); err != nil {
 		return fmt.Errorf("wait for mongodb: %w", err)
 	}
 
-	// Emit healthy event
-	m.sendEvent(opts.EventSink, e2eframe.EventContainerHealthy,
-		fmt.Sprintf("MongoDB container %s is healthy", m.serviceName))
+	// Emit ready event (container is ready after health check completes)
+	m.sendEvent(opts.EventSink, e2eframe.EventContainerReady,
+		fmt.Sprintf("MongoDB container %s is ready", m.serviceName))
 
 	// Run migrations if specified
 	if m.MigrationFilePath != "" {

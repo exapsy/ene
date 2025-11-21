@@ -22,8 +22,7 @@ const (
 	// Container/unit lifecycle events.
 	EventContainerPulling  EventType = "container_pulling"
 	EventContainerStarting EventType = "container_starting"
-	EventContainerStarted  EventType = "container_started"
-	EventContainerHealthy  EventType = "container_healthy"
+	EventContainerReady    EventType = "container_ready"
 	EventContainerFailed   EventType = "container_failed"
 	EventContainerStopped  EventType = "container_stopped"
 

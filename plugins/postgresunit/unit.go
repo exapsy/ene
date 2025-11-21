@@ -221,13 +221,9 @@ func (p *PostgresUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOption
 		opts.CleanupRegistry.Register(cleanableContainer)
 	}
 
-	// Emit started event
-	p.sendEvent(opts.EventSink, e2eframe.EventContainerStarted,
-		fmt.Sprintf("PostgreSQL container %s started", p.serviceName))
-
-	// Emit healthy event (container is healthy after WaitingFor completes)
-	p.sendEvent(opts.EventSink, e2eframe.EventContainerHealthy,
-		fmt.Sprintf("PostgreSQL container %s is healthy", p.serviceName))
+	// Emit ready event (container is ready after WaitingFor completes)
+	p.sendEvent(opts.EventSink, e2eframe.EventContainerReady,
+		fmt.Sprintf("PostgreSQL container %s is ready", p.serviceName))
 
 	// Run migrations if specified
 	if p.MigrationsPath != "" {

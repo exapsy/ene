@@ -531,6 +531,8 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 	}
 
 	var fromDockerfile testcontainers.FromDockerfile
+	var image string
+
 	if s.Dockerfile != "" {
 		// Acquire build semaphore to limit concurrent builds
 		s.buildSemaphore <- struct{}{}
@@ -542,31 +544,43 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 			return fmt.Errorf("failed to generate smart content hash: %w", err)
 		}
 
-		fromDockerfile = testcontainers.FromDockerfile{
-			Context:        dockerBaseDir,
-			Dockerfile:     filepath.Base(dockerfilePath),
-			BuildLogWriter: buildLogWriter,
-			Repo:           fmt.Sprintf("ene-%s", s.name),
-			Tag:            contentHash,
-			BuildOptionsModifier: func(buildOptions *types.ImageBuildOptions) {
-				// Use legacy builder for proper log capture
-				// BuildKit doesn't stream logs to BuildLogWriter properly
-				buildOptions.Version = types.BuilderV1
-				buildOptions.BuildArgs = map[string]*string{}
+		imageName := fmt.Sprintf("ene-%s:%s", s.name, contentHash)
 
-				// Add no-cache option for debugging only
-				if opts.Debug {
-					buildOptions.NoCache = true
-				}
-			},
-		}
-		if opts.CacheImages {
-			fromDockerfile.KeepImage = true
-		}
-	}
+		// Check if image already exists to skip rebuild
+		if opts.CacheImages && s.imageExists(ctx, imageName) {
+			// Image exists, use it directly instead of rebuilding
+			image = imageName
 
-	var image string
-	if s.Image != "" {
+			s.sendEvent(
+				opts.EventSink,
+				e2eframe.EventContainerStarting,
+				fmt.Sprintf("using cached image for HTTP unit %s", s.Name()),
+			)
+		} else {
+			// Image doesn't exist or caching disabled, build it
+			fromDockerfile = testcontainers.FromDockerfile{
+				Context:        dockerBaseDir,
+				Dockerfile:     filepath.Base(dockerfilePath),
+				BuildLogWriter: buildLogWriter,
+				Repo:           fmt.Sprintf("ene-%s", s.name),
+				Tag:            contentHash,
+				BuildOptionsModifier: func(buildOptions *types.ImageBuildOptions) {
+					// Use legacy builder for proper log capture
+					// BuildKit doesn't stream logs to BuildLogWriter properly
+					buildOptions.Version = types.BuilderV1
+					buildOptions.BuildArgs = map[string]*string{}
+
+					// Add no-cache option for debugging only
+					if opts.Debug {
+						buildOptions.NoCache = true
+					}
+				},
+			}
+			if opts.CacheImages {
+				fromDockerfile.KeepImage = true
+			}
+		}
+	} else if s.Image != "" {
 		image = s.Image
 	}
 
@@ -764,7 +778,7 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 
 	s.sendEvent(
 		opts.EventSink,
-		e2eframe.EventContainerHealthy,
+		e2eframe.EventContainerReady,
 		fmt.Sprintf("HTTP unit %s started on port %d", s.Name(), s.Port),
 	)
 
@@ -1097,6 +1111,30 @@ func (s *HTTPUnit) isImportantSourceFile(ext string) bool {
 	}
 
 	return importantExts[ext]
+}
+
+// imageExists checks if a Docker image with the given name exists locally
+func (s *HTTPUnit) imageExists(ctx context.Context, imageName string) bool {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return false
+	}
+	defer cli.Close()
+
+	images, err := cli.ImageList(ctx, image.ListOptions{})
+	if err != nil {
+		return false
+	}
+
+	for _, img := range images {
+		for _, tag := range img.RepoTags {
+			if tag == imageName {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // hashFileContent adds file content to hash with size optimization

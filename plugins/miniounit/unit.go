@@ -268,18 +268,14 @@ func (m *MinioUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) 
 		opts.CleanupRegistry.Register(cleanableContainer)
 	}
 
-	// Emit started event
-	m.sendEvent(opts.EventSink, e2eframe.EventContainerStarted,
-		fmt.Sprintf("MinIO container %s started", m.serviceName))
-
 	// Wait for Minio to be ready and create buckets if specified
 	if err := m.createBuckets(ctx); err != nil {
 		return fmt.Errorf("create buckets: %w", err)
 	}
 
-	// Emit healthy event
-	m.sendEvent(opts.EventSink, e2eframe.EventContainerHealthy,
-		fmt.Sprintf("MinIO container %s is healthy", m.serviceName))
+	// Emit ready event (container is ready after buckets are created)
+	m.sendEvent(opts.EventSink, e2eframe.EventContainerReady,
+		fmt.Sprintf("MinIO container %s is ready", m.serviceName))
 
 	return nil
 }
