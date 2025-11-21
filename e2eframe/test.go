@@ -185,12 +185,13 @@ type RunTestOptions struct {
 	// FilterFunc filters test execution by suite name and test name
 	FilterFunc func(suiteName, testName string) bool
 	// Verbose enables verbose output
-	Verbose      bool
-	CleanupCache bool // Cleanup old cached Docker images to prevent bloat
-	EventSink    chan<- Event
-	MaxRetries   int    // Number of retries for failed tests
-	RetryDelay   string // Delay between retries (e.g. "2s")
-	BaseDir      string // Base directory for the test suite, used for relative paths
+	Verbose         bool
+	CleanupCache    bool // Cleanup old cached Docker images to prevent bloat
+	EventSink       chan<- Event
+	FlushableEvents EventSinkWithFlush // Optional: if provided, ensures event ordering
+	MaxRetries      int                // Number of retries for failed tests
+	RetryDelay      string             // Delay between retries (e.g. "2s")
+	BaseDir         string             // Base directory for the test suite, used for relative paths
 
 	// Performance optimizations
 	CacheImages bool // Enable image caching for faster builds
@@ -718,79 +719,88 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 	cleanableNet := NewCleanableNetwork(net)
 	t.cleanupRegistry.Register(cleanableNet)
 
-	if err = t.interpolateVarsAndStartUnits(ctx, opts, reorderedUnits, varDependencies, net); err != nil {
-		return fmt.Errorf("interpolate vars and start units: %w", err)
-	}
-
-	// Mark end of setup phase (containers are ready)
-	setupEndTime = time.Now()
-
-	// Stop all units
-	// Remove networks
+	// Setup cleanup immediately after network creation to ensure it runs even on early errors
+	// This MUST be before interpolateVarsAndStartUnits to catch startup failures
 	defer func() {
-		// Notify that cleanup is starting
-		t.sendEvent(
-			opts.EventSink,
-			EventInfo,
-			"Cleaning up resources via CleanupRegistry...",
-		)
+		// Don't send cleanup events to avoid interfering with suite timing display
+		// Cleanup happens silently unless there are errors
 
 		// Use CleanupRegistry for centralized cleanup
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cleanupCancel()
 
 		if err := t.cleanupRegistry.CleanupAll(cleanupCtx); err != nil {
+			// Only send event on cleanup failure
 			t.sendEvent(
 				opts.EventSink,
 				EventWarning,
 				fmt.Sprintf("Some resources failed to cleanup: %v", err),
 			)
-		} else {
-			t.sendEvent(
-				opts.EventSink,
-				EventInfo,
-				"All resources cleaned up successfully",
-			)
 		}
+		// Success is silent - no need to notify
 
 		// Fallback: Stop all units directly (for any units not registered)
-		t.sendEvent(
-			opts.EventSink,
-			EventInfo,
-			"Running fallback cleanup for any remaining units...",
-		)
+		// This is now mostly redundant since CleanupRegistry handles everything,
+		// but kept as a safety net. We skip it if cleanupCtx is already cancelled.
+		// Run silently to avoid interfering with output
+		if cleanupCtx.Err() == nil {
 
-		stoppedUnits := 0
-		failedUnits := []string{}
-		for i := len(reorderedUnits) - 1; i >= 0; i-- {
-			unit := reorderedUnits[i]
-			if unit == nil {
-				continue
-			}
+			stoppedUnits := 0
+			failedUnits := []string{}
 
-			// Try to stop the unit (idempotent - will skip if already terminated)
-			if err := unit.Stop(); err != nil {
-				// Only log as warning if it's not already terminated
-				if !strings.Contains(err.Error(), "No such container") {
-					failedUnits = append(failedUnits, unit.Name())
+			// Use a channel to make unit stops non-blocking
+			done := make(chan struct{})
+			go func() {
+				for i := len(reorderedUnits) - 1; i >= 0; i-- {
+					unit := reorderedUnits[i]
+					if unit == nil {
+						continue
+					}
+
+					// Try to stop the unit (idempotent - will skip if already terminated)
+					if err := unit.Stop(); err != nil {
+						// Only log as warning if it's not already terminated
+						if !strings.Contains(err.Error(), "No such container") {
+							failedUnits = append(failedUnits, unit.Name())
+						}
+					} else {
+						stoppedUnits++
+					}
 				}
-			} else {
-				stoppedUnits++
-			}
-		}
+				close(done)
+			}()
 
-		if len(failedUnits) > 0 {
-			t.sendEvent(
-				opts.EventSink,
-				EventWarning,
-				fmt.Sprintf("Fallback cleanup: failed to stop %d units: %v", len(failedUnits), failedUnits),
-			)
+			// Wait for fallback cleanup with timeout
+			select {
+			case <-done:
+				// Fallback cleanup completed
+			case <-time.After(10 * time.Second):
+				t.sendEvent(
+					opts.EventSink,
+					EventWarning,
+					"Fallback cleanup timed out after 10s - continuing with network cleanup",
+				)
+			case <-cleanupCtx.Done():
+				t.sendEvent(
+					opts.EventSink,
+					EventWarning,
+					"Fallback cleanup cancelled - continuing with network cleanup",
+				)
+			}
+
+			if len(failedUnits) > 0 {
+				t.sendEvent(
+					opts.EventSink,
+					EventWarning,
+					fmt.Sprintf("Fallback cleanup: failed to stop %d units: %v", len(failedUnits), failedUnits),
+				)
+			}
 		}
 
 		// Wait for containers to actually terminate (with configurable timeout)
 		startWait := time.Now()
 		terminationTimeout := 30 * time.Second
-		if err := WaitForContainersTermination(ctx, net, terminationTimeout); err != nil {
+		if err := WaitForContainersTermination(cleanupCtx, net, terminationTimeout); err != nil {
 			t.sendEvent(
 				opts.EventSink,
 				EventWarning,
@@ -800,7 +810,7 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		}
 
 		// Fallback network cleanup (should already be done by registry, but just in case)
-		if err := ForceCleanupNetwork(ctx, net); err != nil {
+		if err := ForceCleanupNetwork(cleanupCtx, net); err != nil {
 			// Only log if it's a real error, not "network not found"
 			if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "No such network") {
 				t.sendEvent(
@@ -811,6 +821,14 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 			}
 		}
 	}()
+
+	// Start all units (containers, services, etc.)
+	if err = t.interpolateVarsAndStartUnits(ctx, opts, reorderedUnits, varDependencies, net); err != nil {
+		return fmt.Errorf("interpolate vars and start units: %w", err)
+	}
+
+	// Mark end of setup phase (containers are ready)
+	setupEndTime = time.Now()
 
 	// Run before all tests script if provided
 	if err := t.runBeforeAll(ctx, opts); err != nil {
@@ -917,7 +935,15 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		return fmt.Errorf("run after all tests script: %w", err)
 	}
 
+	// Flush pending events to ensure proper ordering before suite finished event
+	// This guarantees all test events (including log messages) are rendered before
+	// the suite timing line updates, preventing TTY cursor manipulation issues
+	if opts.FlushableEvents != nil {
+		opts.FlushableEvents.Flush()
+	}
+
 	// Send suite finished event AFTER all tests complete but BEFORE cleanup
+	// This must be sent here (not in defer) so the UI can update the header before cleanup messages
 	totalTime := time.Since(suiteStartTime)
 	setupTime := time.Duration(0)
 	if !setupEndTime.IsZero() {

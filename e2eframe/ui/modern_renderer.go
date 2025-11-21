@@ -30,6 +30,7 @@ type ModernRenderer struct {
 	linesAfterHeader   int    // Count lines printed after suite header
 	suiteIndex         int    // Current suite index
 	totalSuites        int    // Total suites
+	hasLogMessages     bool   // Track if log messages were printed (affects cursor manipulation)
 
 	// Spinner for progress indication
 	spinner        *Spinner
@@ -111,6 +112,7 @@ func (r *ModernRenderer) RenderSuiteStart(suite SuiteInfo) error {
 	r.linesAfterHeader = 0
 	r.suiteIndex = suite.Index
 	r.totalSuites = suite.Total
+	r.hasLogMessages = false // Reset for new suite
 
 	return r.write(line)
 }
@@ -154,7 +156,8 @@ func (r *ModernRenderer) RenderSuiteFinished(suite SuiteFinishedInfo) error {
 	overheadStr := formatDuration(overhead)
 
 	// In TTY mode, go back and update the suite header
-	if r.isTTY && r.linesAfterHeader > 0 {
+	// BUT skip cursor manipulation if log messages were printed (fragile with logs)
+	if r.isTTY && r.linesAfterHeader > 0 && !r.hasLogMessages {
 		// Move cursor up to get back to the header line
 		// We need to move up linesAfterHeader lines to get to just after the header,
 		// then one more line to reach the header itself
@@ -472,6 +475,7 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 
 	// Display saved log paths if any
 	if len(test.LogPaths) > 0 {
+		r.hasLogMessages = true // Mark that logs were printed
 		logHeader := fmt.Sprintf("  %s📋%s Container logs saved for debugging:\n",
 			c.Blue, c.Reset)
 		if err := r.write(logHeader); err != nil {

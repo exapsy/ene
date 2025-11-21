@@ -307,15 +307,16 @@ func ListTestSuiteNames(baseDir string) ([]string, error) {
 }
 
 type RunOpts struct {
-	FilterFunc   func(test, testName string) bool
-	Verbose      bool
-	Parallel     bool
-	Events       EventSink
-	MaxRetries   int    // Number of retries for failed tests
-	RetryDelay   string // Delay between retries (e.g. "2s")
-	Debug        bool   // Enable debug mode
-	BaseDir      string // Base directory for test suites
-	CleanupCache bool   // Cleanup old cached Docker images to prevent bloat
+	FilterFunc      func(test, testName string) bool
+	Verbose         bool
+	Parallel        bool
+	Events          EventSink
+	FlushableEvents EventSinkWithFlush // Optional: if provided, will be used to ensure event ordering
+	MaxRetries      int                // Number of retries for failed tests
+	RetryDelay      string             // Delay between retries (e.g. "2s")
+	Debug           bool               // Enable debug mode
+	BaseDir         string             // Base directory for test suites
+	CleanupCache    bool               // Cleanup old cached Docker images to prevent bloat
 }
 
 type DryRunOpts struct {
@@ -532,14 +533,15 @@ func runTestsInParallel(
 			defer wg.Done()
 
 			err := testSuite.Run(ctx, &RunTestOptions{
-				FilterFunc:   opts.FilterFunc,
-				Verbose:      opts.Verbose,
-				CleanupCache: opts.CleanupCache,
-				EventSink:    events,
-				MaxRetries:   opts.MaxRetries,
-				RetryDelay:   opts.RetryDelay,
-				Debug:        opts.Debug,
-				BaseDir:      opts.BaseDir,
+				FilterFunc:      opts.FilterFunc,
+				Verbose:         opts.Verbose,
+				CleanupCache:    opts.CleanupCache,
+				EventSink:       events,
+				FlushableEvents: opts.FlushableEvents,
+				MaxRetries:      opts.MaxRetries,
+				RetryDelay:      opts.RetryDelay,
+				Debug:           opts.Debug,
+				BaseDir:         opts.BaseDir,
 			})
 			if err != nil {
 				events <- &SuiteErrorEvent{
@@ -581,14 +583,15 @@ func runTestsSequentially(
 
 		// Create test options with filter
 		err := testSuite.Run(ctx, &RunTestOptions{
-			FilterFunc:   opts.FilterFunc,
-			Verbose:      opts.Verbose,
-			CleanupCache: opts.CleanupCache,
-			EventSink:    events,
-			MaxRetries:   opts.MaxRetries,
-			RetryDelay:   opts.RetryDelay,
-			Debug:        opts.Debug,
-			BaseDir:      opts.BaseDir,
+			FilterFunc:      opts.FilterFunc,
+			Verbose:         opts.Verbose,
+			CleanupCache:    opts.CleanupCache,
+			EventSink:       events,
+			FlushableEvents: opts.FlushableEvents,
+			MaxRetries:      opts.MaxRetries,
+			RetryDelay:      opts.RetryDelay,
+			Debug:           opts.Debug,
+			BaseDir:         opts.BaseDir,
 		})
 		if err != nil {
 			events <- &SuiteErrorEvent{

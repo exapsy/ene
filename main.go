@@ -86,8 +86,8 @@ var rootCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Collect test results
-		eventChan := e2eframe.NewEventChannel()
+		// Collect test results using flushable event sink for ordered processing
+		flushableSink, eventChan := e2eframe.NewFlushableEventSink(100)
 		var eventSink e2eframe.EventSink = eventChan
 
 		// Use optimized defaults for better performance
@@ -120,15 +120,16 @@ var rootCmd = &cobra.Command{
 		}()
 
 		err = e2eframe.Run(ctx, &e2eframe.RunOpts{
-			FilterFunc:   shouldIncludeTest,
-			Verbose:      isVerbose,
-			Parallel:     isParallel,
-			Events:       eventSink,
-			MaxRetries:   maxRetries,
-			RetryDelay:   "2s",
-			Debug:        isDebug,
-			BaseDir:      baseDir,
-			CleanupCache: isCleanupCache,
+			FilterFunc:      shouldIncludeTest,
+			Verbose:         isVerbose,
+			Parallel:        isParallel,
+			Events:          eventSink,
+			FlushableEvents: flushableSink,
+			MaxRetries:      maxRetries,
+			RetryDelay:      "2s",
+			Debug:           isDebug,
+			BaseDir:         baseDir,
+			CleanupCache:    isCleanupCache,
 		})
 		if err != nil {
 			fmt.Printf("%s%s✖ ERROR: %v%s\n", colorBold, colorRed, err, colorReset)
@@ -177,6 +178,12 @@ var rootCmd = &cobra.Command{
 
 		// Process events
 		for event := range eventChan {
+			// Handle flush tokens for event ordering
+			if flushableSink.IsFlushToken(event) {
+				flushableSink.MarkFlushComplete(event)
+				continue
+			}
+
 			err := testsSecretary.ConsumeEvent(event)
 			if err != nil {
 				fmt.Printf("%s%s✖ ERROR: %v%s\n", colorBold, colorRed, err, colorReset)

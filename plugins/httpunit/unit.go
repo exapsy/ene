@@ -764,7 +764,7 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 
 	s.sendEvent(
 		opts.EventSink,
-		e2eframe.EventContainerStarted,
+		e2eframe.EventContainerHealthy,
 		fmt.Sprintf("HTTP unit %s started on port %d", s.Name(), s.Port),
 	)
 
