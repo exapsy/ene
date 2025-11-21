@@ -484,8 +484,10 @@ func (r *ModernRenderer) RenderTestCompleted(test TestInfo) error {
 		r.linesAfterHeader++
 
 		for _, logPath := range test.LogPaths {
+			// Escape spaces in file paths for clarity
+			escapedPath := strings.ReplaceAll(logPath, " ", "\\ ")
 			logLine := fmt.Sprintf("     %s•%s %s\n",
-				c.Dim+c.Gray, c.Reset, logPath)
+				c.Dim+c.Gray, c.Reset, escapedPath)
 			if err := r.write(logLine); err != nil {
 				return err
 			}
