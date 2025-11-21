@@ -729,6 +729,12 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 
 	s.cont = cont
 
+	// Register container with cleanup registry if provided
+	if opts.CleanupRegistry != nil {
+		cleanableContainer := e2eframe.NewCleanableContainer(cont, s.name)
+		opts.CleanupRegistry.Register(cleanableContainer)
+	}
+
 	s.endpoint = fmt.Sprintf("http://%s:%s", s.Name(), exposedPort)
 
 	return nil

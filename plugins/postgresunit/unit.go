@@ -215,6 +215,12 @@ func (p *PostgresUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOption
 
 	p.container = cont
 
+	// Register container with cleanup registry if provided
+	if opts.CleanupRegistry != nil {
+		cleanableContainer := e2eframe.NewCleanableContainer(cont, p.serviceName)
+		opts.CleanupRegistry.Register(cleanableContainer)
+	}
+
 	// Emit started event
 	p.sendEvent(opts.EventSink, e2eframe.EventContainerStarted,
 		fmt.Sprintf("PostgreSQL container %s started", p.serviceName))

@@ -10,6 +10,7 @@ Practical examples and recipes for common testing scenarios with ENE.
 - [Object Storage Testing](#object-storage-testing)
 - [Multi-Service Testing](#multi-service-testing)
 - [Advanced Patterns](#advanced-patterns)
+- [Resource Management & Cleanup](#resource-management--cleanup)
 
 ---
 
@@ -936,6 +937,344 @@ tests:
 - Works with nested conditions like `>`, `<`, `equals`, `contains`, etc.
 - Can combine multiple conditions on different fields
 ```
+
+---
+
+## Resource Management & Cleanup
+
+ENE automatically manages Docker resources during test execution. However, understanding cleanup is important for CI/CD pipelines and troubleshooting.
+
+### Automatic Cleanup in Tests
+
+ENE uses a `CleanupRegistry` that ensures proper cleanup order automatically:
+
+```go
+// This happens automatically in TestSuiteV1
+registry := e2eframe.NewCleanupRegistry()
+defer registry.CleanupAll(context.Background())
+
+// Resources are registered as they're created
+registry.Register(e2eframe.NewCleanableNetwork(network))
+registry.Register(e2eframe.NewCleanableContainer(container, "unit-name"))
+
+// Cleanup happens in correct order:
+// 1. Containers (first)
+// 2. Networks (after containers detach)
+// 3. Other resources
+```
+
+**Key Benefits:**
+- No "network has active endpoints" errors
+- Resources cleaned even if tests fail
+- Proper error handling and reporting
+
+### Manual Cleanup Command
+
+The `ene cleanup` command removes orphaned Docker resources.
+
+**Basic Usage:**
+
+```bash
+# Interactive cleanup (asks for confirmation)
+ene cleanup
+
+# Preview what would be removed (safe)
+ene cleanup --dry-run --verbose
+
+# Force cleanup without confirmation
+ene cleanup --force
+
+# Clean specific resource types
+ene cleanup networks --force
+ene cleanup containers --force
+```
+
+**Age-Based Filtering:**
+
+```bash
+# Clean resources older than 1 hour
+ene cleanup --older-than=1h --force
+
+# Clean resources older than 24 hours
+ene cleanup --older-than=24h --force
+
+# Clean resources older than 30 minutes
+ene cleanup --older-than=30m --force
+```
+
+**Advanced Options:**
+
+```bash
+# Include all resources (not just orphaned)
+ene cleanup --all --force
+
+# Verbose output for debugging
+ene cleanup --dry-run --verbose
+
+# Combine options
+ene cleanup --older-than=2h --verbose --force
+```
+
+### CI/CD Integration Examples
+
+**GitLab CI:**
+
+```yaml
+# .gitlab-ci.yml
+test:
+  image: golang:1.25
+  services:
+    - docker:dind
+  before_script:
+    - apt-get update && apt-get install -y docker.io
+    - go build -o ene .
+  script:
+    - ./ene --verbose
+  after_script:
+    # Always clean up, even if tests fail
+    - ./ene cleanup --older-than=30m --force
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+```
+
+**GitHub Actions:**
+
+```yaml
+# .github/workflows/test.yml
+name: E2E Tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+      
+      - name: Build ENE
+        run: go build -o ene .
+      
+      - name: Run Tests
+        run: ./ene --verbose --html=report.html
+      
+      - name: Cleanup Docker Resources
+        if: always()
+        run: ./ene cleanup --older-than=30m --force --verbose
+      
+      - name: Upload Test Report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-report
+          path: report.html
+```
+
+**Jenkins Pipeline:**
+
+```groovy
+// Jenkinsfile
+pipeline {
+    agent any
+    
+    stages {
+        stage('Build') {
+            steps {
+                sh 'go build -o ene .'
+            }
+        }
+        
+        stage('E2E Tests') {
+            steps {
+                sh './ene --verbose --json=report.json'
+            }
+        }
+    }
+    
+    post {
+        always {
+            // Cleanup regardless of test results
+            sh './ene cleanup --older-than=1h --force'
+            
+            // Archive reports
+            archiveArtifacts artifacts: 'report.json', allowEmptyArchive: true
+        }
+    }
+}
+```
+
+**CircleCI:**
+
+```yaml
+# .circleci/config.yml
+version: 2.1
+
+jobs:
+  test:
+    docker:
+      - image: cimg/go:1.25
+    steps:
+      - checkout
+      - setup_remote_docker
+      
+      - run:
+          name: Build ENE
+          command: go build -o ene .
+      
+      - run:
+          name: Run E2E Tests
+          command: ./ene --verbose --html=report.html
+      
+      - run:
+          name: Cleanup Docker Resources
+          command: ./ene cleanup --older-than=30m --force
+          when: always
+      
+      - store_artifacts:
+          path: report.html
+          destination: test-report
+
+workflows:
+  test:
+    jobs:
+      - test
+```
+
+### Periodic Cleanup with Cron
+
+For servers running ENE regularly, set up periodic cleanup:
+
+```bash
+# Edit crontab
+crontab -e
+
+# Add nightly cleanup (2 AM daily)
+0 2 * * * /usr/local/bin/ene cleanup --older-than=24h --force >> /var/log/ene-cleanup.log 2>&1
+
+# Or every 6 hours
+0 */6 * * * /usr/local/bin/ene cleanup --older-than=12h --force >> /var/log/ene-cleanup.log 2>&1
+```
+
+### Troubleshooting Resource Leaks
+
+**Scenario: Tests are leaving resources behind**
+
+```bash
+# Step 1: Check what's orphaned
+ene cleanup --dry-run --verbose
+
+# Output shows:
+# Found 3 orphaned resources:
+# 
+# Containers (2):
+#   - testcontainers-abc123 (postgres, stopped 2h ago)
+#   - testcontainers-def456 (httpunit, stopped 3h ago)
+# 
+# Networks (1):
+#   - testcontainers-xyz789 (created 2h ago, 0 containers)
+
+# Step 2: Clean them up
+ene cleanup --force
+```
+
+**Scenario: "Network has active endpoints" error**
+
+```bash
+# The new cleanup command handles this automatically
+# But if you still see this error:
+
+# Step 1: Clean containers first
+ene cleanup containers --force
+
+# Step 2: Then clean networks
+ene cleanup networks --force
+
+# Or let the command handle ordering automatically
+ene cleanup --force
+```
+
+**Scenario: Manual Docker inspection**
+
+```bash
+# List all testcontainers networks
+docker network ls | grep testcontainers
+
+# List all testcontainers containers
+docker ps -a | grep testcontainers
+
+# Inspect a specific network
+docker network inspect <network-id>
+
+# Remove manually if needed
+docker rm -f <container-id>
+docker network rm <network-id>
+```
+
+### Best Practices
+
+**For Local Development:**
+
+```bash
+# Check for orphaned resources after testing session
+ene cleanup --dry-run --verbose
+
+# Clean up when done
+ene cleanup --force
+```
+
+**For CI/CD:**
+
+```yaml
+# Always clean up in after_script/post steps
+after_script:
+  - ene cleanup --older-than=30m --force
+```
+
+**For Shared Test Environments:**
+
+```bash
+# Be more conservative with age filtering
+ene cleanup --older-than=2h --force
+
+# Or use dry-run first to verify
+ene cleanup --older-than=2h --dry-run --verbose
+```
+
+**For Production CI Servers:**
+
+```bash
+# Daily cleanup of old resources
+0 2 * * * /usr/local/bin/ene cleanup --older-than=24h --force
+
+# Monitoring: Alert if cleanup fails
+0 2 * * * /usr/local/bin/ene cleanup --older-than=24h --force || /usr/local/bin/alert-ops "ENE cleanup failed"
+```
+
+### Migration from Old Cleanup
+
+If you were using the old `cleanup-networks` command:
+
+```bash
+# Old (deprecated)
+ene cleanup-networks --all
+
+# New (recommended)
+ene cleanup --force
+
+# With age filtering (new capability)
+ene cleanup --older-than=1h --force
+```
+
+For more details, see:
+- [Cleanup Architecture Guide](../e2eframe/CLEANUP_ARCHITECTURE.md)
+- [Migration Guide](../e2eframe/MIGRATION_GUIDE.md)
+- [CLI Usage - Cleanup Command](CLI_USAGE.md#cleanup)
 
 ---
 

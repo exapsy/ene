@@ -43,6 +43,13 @@ ene version
 
 # Shell completion
 ene completion bash > /etc/bash_completion.d/ene
+
+# Cleanup orphaned resources
+ene cleanup --dry-run              # Preview
+ene cleanup --force                # Clean up
+ene cleanup --older-than=1h        # Age filter
+ene cleanup networks --force       # Networks only
+ene cleanup containers --force     # Containers only
 ```
 
 ## Common Flags
@@ -58,6 +65,54 @@ ene completion bash > /etc/bash_completion.d/ene
 | `--json` | | JSON report path |
 | `--base-dir` | | Base directory |
 | `--cleanup-cache` | | Cleanup Docker cache |
+
+## Cleanup Commands
+
+```bash
+# Interactive cleanup (with confirmation)
+ene cleanup
+
+# Preview without removing (safe)
+ene cleanup --dry-run --verbose
+
+# Force cleanup without confirmation
+ene cleanup --force
+
+# Clean specific resource types
+ene cleanup networks --force
+ene cleanup containers --force
+
+# Age-based filtering
+ene cleanup --older-than=1h --force
+ene cleanup --older-than=24h --force
+
+# Include all resources (not just orphaned)
+ene cleanup --all --force
+
+# Verbose output
+ene cleanup --verbose --dry-run
+```
+
+### Cleanup Flags
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Show what would be removed without removing |
+| `--force` | Skip confirmation prompt |
+| `--all` | Include all resources, not just orphaned |
+| `--older-than` | Only clean resources older than duration (e.g., 1h, 30m, 24h) |
+| `--verbose` | Show detailed information |
+
+### CI/CD Integration
+
+```bash
+# GitLab CI / GitHub Actions
+after_script:
+  - ene cleanup --older-than=30m --force
+
+# Cron job (nightly cleanup)
+0 2 * * * /usr/local/bin/ene cleanup --older-than=24h --force
+```
 
 ## Basic Configuration
 

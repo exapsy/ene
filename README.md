@@ -185,6 +185,11 @@ ene --debug --verbose
 
 # Cleanup old Docker images
 ene --cleanup-cache
+
+# Cleanup orphaned Docker resources
+ene cleanup --dry-run            # Preview what would be removed
+ene cleanup --force              # Remove orphaned resources
+ene cleanup --older-than=1h      # Remove resources older than 1 hour
 ```
 
 ## 📝 Configuration Reference
@@ -462,6 +467,102 @@ header_asserts:
           - "*.tmp"
 ```
 
+## 🧹 Resource Management & Cleanup
+
+ENE automatically manages Docker resources (containers, networks) during test execution. However, if tests are interrupted or fail, resources may be left behind.
+
+### Automatic Cleanup
+
+ENE uses a `CleanupRegistry` that ensures proper cleanup order:
+1. **Containers** are removed first
+2. **Networks** are removed after containers detach
+3. Resources are cleaned even if individual cleanups fail
+
+This prevents common errors like "network has active endpoints."
+
+### Manual Cleanup Command
+
+Use the `ene cleanup` command to remove orphaned resources:
+
+```bash
+# Interactive cleanup (shows what will be removed)
+ene cleanup
+
+# Preview without removing (dry-run)
+ene cleanup --dry-run --verbose
+
+# Force cleanup without confirmation
+ene cleanup --force
+
+# Clean specific resource types
+ene cleanup networks             # Networks only
+ene cleanup containers           # Containers only
+
+# Age-based filtering
+ene cleanup --older-than=1h      # Resources older than 1 hour
+ene cleanup --older-than=24h     # Resources older than 1 day
+
+# Include all resources (not just orphaned)
+ene cleanup --all --force
+
+# Verbose output for debugging
+ene cleanup --verbose
+```
+
+### Best Practices
+
+**For CI/CD:**
+```yaml
+# GitLab CI
+after_script:
+  - ene cleanup --older-than=30m --force
+  
+# GitHub Actions
+- name: Cleanup
+  if: always()
+  run: ene cleanup --older-than=30m --force
+```
+
+**For Local Development:**
+```bash
+# Check for orphaned resources
+ene cleanup --dry-run --verbose
+
+# Clean up after testing
+ene cleanup --force
+```
+
+**Periodic Cleanup (Cron):**
+```bash
+# Add to crontab for nightly cleanup
+0 2 * * * /usr/local/bin/ene cleanup --older-than=24h --force
+```
+
+### Troubleshooting Resource Leaks
+
+If you see orphaned Docker resources:
+
+```bash
+# 1. Discover what's orphaned
+ene cleanup --dry-run --verbose
+
+# 2. Check Docker resources manually
+docker network ls | grep testcontainers
+docker ps -a | grep testcontainers
+
+# 3. Clean them up
+ene cleanup --force
+
+# 4. For stubborn resources, inspect and remove manually
+docker network inspect <network-id>
+docker rm -f <container-id>
+docker network rm <network-id>
+```
+
+For more details, see:
+- [Cleanup Architecture Guide](e2eframe/CLEANUP_ARCHITECTURE.md)
+- [Migration Guide](e2eframe/MIGRATION_GUIDE.md)
+
 ## 🔍 Debugging
 
 ### Enable Verbose Logging
@@ -501,6 +602,8 @@ ene dry-run --verbose
 - **[CLI Usage](docs/CLI_USAGE.md)** - Complete command-line reference
 - **[Configuration Reference](docs/CONFIGURATION_REFERENCE.md)** - Full YAML schema documentation
 - **[Examples](docs/EXAMPLES.md)** - Real-world test examples
+- **[Cleanup Architecture](e2eframe/CLEANUP_ARCHITECTURE.md)** - Resource management internals
+- **[Migration Guide](e2eframe/MIGRATION_GUIDE.md)** - Upgrade to new cleanup system
 
 ## 🤝 Contributing
 

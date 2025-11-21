@@ -7,6 +7,12 @@ ENE is an end-to-end (e2e) testing framework that uses Docker containers to spin
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [CLI Commands](#cli-commands)
+  - [Default Command (Run Tests)](#default-command-run-tests)
+  - [scaffold-test](#scaffold-test)
+  - [dry-run](#dry-run)
+  - [list-suites](#list-suites)
+  - [cleanup](#cleanup)
+  - [version](#version)
 - [Command Options](#command-options)
 - [Test Suite Configuration](#test-suite-configuration)
 - [Examples](#examples)
@@ -92,6 +98,140 @@ When called with no subcommand, `ene` runs all e2e tests.
 ```bash
 ene [flags]
 ```
+
+### `list-suites`
+
+List all available test suites in the `tests/` directory.
+
+```bash
+ene list-suites
+```
+
+**Output:**
+```
+Available test suites:
+  user-api-tests
+  payment-service-tests
+  integration-tests
+```
+
+---
+
+### `cleanup`
+
+Clean up orphaned Docker resources (containers, networks) created by ENE tests.
+
+```bash
+ene cleanup [resource-type] [flags]
+```
+
+**Resource Types:**
+- `all` - Clean all resource types (default)
+- `networks` - Clean only Docker networks
+- `containers` - Clean only Docker containers
+
+**Flags:**
+- `--dry-run` - Show what would be removed without actually removing
+- `--force` - Skip confirmation prompt
+- `--all` - Include all resources, not just orphaned ones
+- `--older-than=<duration>` - Only clean resources older than specified duration (e.g., 1h, 30m, 24h)
+- `--verbose` - Show detailed information about discovered resources
+
+**Examples:**
+
+```bash
+# Interactive cleanup (shows what will be removed and asks for confirmation)
+ene cleanup
+
+# Preview what would be removed (safe, no changes made)
+ene cleanup --dry-run --verbose
+
+# Force cleanup without confirmation
+ene cleanup --force
+
+# Clean only networks
+ene cleanup networks --force
+
+# Clean only containers
+ene cleanup containers --force
+
+# Clean resources older than 1 hour
+ene cleanup --older-than=1h --force
+
+# Clean resources older than 24 hours
+ene cleanup --older-than=24h --force
+
+# Include all resources (not just orphaned)
+ene cleanup --all --force
+
+# Verbose output for debugging
+ene cleanup --verbose --dry-run
+```
+
+**Use Cases:**
+
+**CI/CD Integration:**
+```yaml
+# GitLab CI
+after_script:
+  - ene cleanup --older-than=30m --force
+
+# GitHub Actions
+- name: Cleanup Docker Resources
+  if: always()
+  run: ene cleanup --older-than=30m --force --verbose
+```
+
+**Periodic Cleanup (Cron):**
+```bash
+# Add to crontab for nightly cleanup
+0 2 * * * /usr/local/bin/ene cleanup --older-than=24h --force >> /var/log/ene-cleanup.log 2>&1
+```
+
+**Manual Troubleshooting:**
+```bash
+# Check what's orphaned
+ene cleanup --dry-run --verbose
+
+# Clean specific type
+ene cleanup containers --force
+
+# Clean everything
+ene cleanup --force
+```
+
+**How It Works:**
+
+The cleanup command:
+1. Discovers orphaned Docker resources created by ENE (identified by `testcontainers-` prefix)
+2. Filters by age if `--older-than` is specified
+3. Removes containers first, then networks (proper ordering prevents "active endpoints" errors)
+4. Reports what was cleaned and any errors encountered
+
+**Troubleshooting:**
+
+If you see "network has active endpoints" errors:
+```bash
+# Clean containers first, then networks
+ene cleanup containers --force
+ene cleanup networks --force
+```
+
+For more details, see:
+- [Cleanup Architecture Guide](../e2eframe/CLEANUP_ARCHITECTURE.md)
+- [Migration Guide](../e2eframe/MIGRATION_GUIDE.md)
+
+---
+
+### `version`
+
+Display the ENE version information.
+
+```bash
+ene version
+```
+
+---
 
 ### `scaffold-test`
 

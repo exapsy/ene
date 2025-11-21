@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/exapsy/ene/e2eframe"
 	_ "github.com/exapsy/ene/plugins/httpmockunit"
@@ -306,30 +307,177 @@ var listSuitesCmd = &cobra.Command{
 	},
 }
 
-var cleanupNetworksCmd = &cobra.Command{
-	Use:   "cleanup-networks",
-	Short: "Clean up orphaned Docker networks created by ene",
-	Long: `Remove Docker networks that were left behind due to interrupted tests or errors.
-This is useful when you run out of network space or have accumulated many unused networks.`,
+var cleanupCmd = &cobra.Command{
+	Use:   "cleanup [resource-type]",
+	Short: "Clean up orphaned Docker resources created by ene",
+	Long: `Discovers and removes orphaned Docker resources created by ene tests.
+
+Supported resource types:
+  networks    - Clean up Docker networks
+  containers  - Clean up Docker containers
+  all         - Clean up all resource types (default)
+
+Examples:
+  ene cleanup                      # Interactive cleanup (shows what will be removed)
+  ene cleanup --dry-run            # Show what would be removed without removing
+  ene cleanup --force              # Skip confirmation prompt
+  ene cleanup networks             # Clean only networks
+  ene cleanup containers           # Clean only containers
+  ene cleanup --older-than=1h      # Clean resources older than 1 hour
+  ene cleanup --all                # Clean all resource types
+
+The cleanup command uses the CleanupRegistry to ensure proper ordering:
+containers are removed before networks to prevent "network has active endpoints" errors.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		dryRun := cmd.Flag("dry-run").Value.String() == "true"
 		force := cmd.Flag("force").Value.String() == "true"
 		all := cmd.Flag("all").Value.String() == "true"
+		olderThanStr := cmd.Flag("older-than").Value.String()
+		verbose := cmd.Flag("verbose").Value.String() == "true"
 
-		if !force && !all {
-			fmt.Printf("%s%sThis will remove Docker networks created by ene tests.%s\n", colorBold, colorYellow, colorReset)
-			fmt.Printf("To proceed, use: %sene cleanup-networks --force%s\n", colorCyan, colorReset)
-			fmt.Printf("To remove ALL unused networks: %sene cleanup-networks --all%s\n", colorCyan, colorReset)
-			return
+		// Parse older-than duration
+		var olderThan time.Duration
+		if olderThanStr != "" {
+			var err error
+			olderThan, err = time.ParseDuration(olderThanStr)
+			if err != nil {
+				fmt.Printf("%s%s✖ ERROR: Invalid duration format: %v%s\n", colorBold, colorRed, err, colorReset)
+				fmt.Printf("Examples: 1h, 30m, 1h30m\n")
+				os.Exit(1)
+			}
+		}
+
+		// Determine resource type from args
+		resourceType := "all"
+		if len(args) > 0 {
+			resourceType = args[0]
+			// Validate resource type
+			if resourceType != "all" && resourceType != "networks" && resourceType != "containers" {
+				fmt.Printf("%s%s✖ ERROR: Invalid resource type: %s%s\n", colorBold, colorRed, resourceType, colorReset)
+				fmt.Printf("Valid types: all, networks, containers\n")
+				os.Exit(1)
+			}
 		}
 
 		ctx := context.Background()
 
-		if err := e2eframe.CleanupOrphanedNetworks(ctx, all); err != nil {
-			fmt.Printf("%s%s✖ ERROR: %v%s\n", colorBold, colorRed, err, colorReset)
+		// Create discoverer
+		discoverer, err := e2eframe.NewResourceDiscoverer()
+		if err != nil {
+			fmt.Printf("%s%s✖ ERROR: Failed to connect to Docker: %v%s\n", colorBold, colorRed, err, colorReset)
+			fmt.Printf("Is Docker running?\n")
+			os.Exit(1)
+		}
+		defer discoverer.Close()
+
+		// Discover resources
+		opts := e2eframe.DiscoverOptions{
+			OlderThan:  olderThan,
+			IncludeAll: all,
+		}
+
+		var networks []e2eframe.OrphanedNetwork
+		var containers []e2eframe.OrphanedContainer
+
+		if resourceType == "all" || resourceType == "networks" {
+			networks, err = discoverer.DiscoverOrphanedNetworks(ctx, opts)
+			if err != nil {
+				fmt.Printf("%s%s✖ ERROR: Failed to discover networks: %v%s\n", colorBold, colorRed, err, colorReset)
+				os.Exit(1)
+			}
+		}
+
+		if resourceType == "all" || resourceType == "containers" {
+			containers, err = discoverer.DiscoverOrphanedContainers(ctx, opts)
+			if err != nil {
+				fmt.Printf("%s%s✖ ERROR: Failed to discover containers: %v%s\n", colorBold, colorRed, err, colorReset)
+				os.Exit(1)
+			}
+		}
+
+		// Display what was found
+		if len(networks) == 0 && len(containers) == 0 {
+			fmt.Printf("%s%s✓ No orphaned resources found.%s\n", colorBold, colorGreen, colorReset)
+			return
+		}
+
+		fmt.Printf("%s%sFound orphaned resources:%s\n", colorBold, colorCyan, colorReset)
+		if len(containers) > 0 {
+			fmt.Printf("  %sContainers:%s %d\n", colorYellow, colorReset, len(containers))
+			if verbose {
+				for _, cont := range containers {
+					fmt.Printf("    - %s (state: %s, age: %v)\n", cont.Name, cont.State, cont.Age.Round(time.Second))
+				}
+			}
+		}
+		if len(networks) > 0 {
+			fmt.Printf("  %sNetworks:%s %d\n", colorYellow, colorReset, len(networks))
+			if verbose {
+				for _, net := range networks {
+					fmt.Printf("    - %s (containers: %d, age: %v)\n", net.Name, net.Containers, net.Age.Round(time.Second))
+				}
+			}
+		}
+		fmt.Println()
+
+		// In dry-run mode, just list and exit
+		if dryRun {
+			fmt.Printf("%s%sDry-run mode - no resources will be removed%s\n", colorBold, colorYellow, colorReset)
+			fmt.Printf("Run without --dry-run to perform cleanup\n")
+			return
+		}
+
+		// Confirm if not forced
+		if !force {
+			fmt.Printf("Proceed with cleanup? [y/N]: ")
+			var response string
+			fmt.Scanln(&response)
+			if response != "y" && response != "Y" {
+				fmt.Printf("%s%sCleanup cancelled.%s\n", colorBold, colorYellow, colorReset)
+				return
+			}
+		}
+
+		// Perform cleanup using orchestrator
+		orchestrator, err := e2eframe.NewCleanupOrchestrator()
+		if err != nil {
+			fmt.Printf("%s%s✖ ERROR: Failed to create cleanup orchestrator: %v%s\n", colorBold, colorRed, err, colorReset)
+			os.Exit(1)
+		}
+		defer orchestrator.Close()
+
+		fmt.Printf("%s%sCleaning up resources...%s\n", colorBold, colorCyan, colorReset)
+		result, err := orchestrator.CleanupOrphanedResources(ctx, opts)
+		if err != nil {
+			fmt.Printf("%s%s✖ ERROR: Cleanup failed: %v%s\n", colorBold, colorRed, err, colorReset)
 			os.Exit(1)
 		}
 
-		fmt.Printf("%s%s✓ Network cleanup completed%s\n", colorBold, colorGreen, colorReset)
+		// Display results
+		fmt.Println()
+		if result.ContainersRemoved > 0 || result.NetworksRemoved > 0 {
+			fmt.Printf("%s%s✓ Cleanup completed in %v%s\n", colorBold, colorGreen, result.Duration.Round(time.Millisecond), colorReset)
+		}
+
+		fmt.Printf("  Containers: %d found, %s%d removed%s", result.ContainersFound, colorGreen, result.ContainersRemoved, colorReset)
+		if result.ContainersFailed > 0 {
+			fmt.Printf(", %s%d failed%s", colorRed, result.ContainersFailed, colorReset)
+		}
+		fmt.Println()
+
+		fmt.Printf("  Networks:   %d found, %s%d removed%s", result.NetworksFound, colorGreen, result.NetworksRemoved, colorReset)
+		if result.NetworksFailed > 0 {
+			fmt.Printf(", %s%d failed%s", colorRed, result.NetworksFailed, colorReset)
+		}
+		fmt.Println()
+
+		if len(result.Errors) > 0 {
+			fmt.Printf("\n%s%sErrors occurred during cleanup:%s\n", colorBold, colorYellow, colorReset)
+			for _, cleanupErr := range result.Errors {
+				fmt.Printf("  ✖ %v\n", cleanupErr)
+			}
+			os.Exit(1)
+		}
 	},
 }
 
@@ -463,13 +611,16 @@ func init() {
 
 	listSuitesCmd.Flags().String("base-dir", "", "base directory for tests, defaults to current directory")
 
-	cleanupNetworksCmd.Flags().Bool("force", false, "confirm network cleanup")
-	cleanupNetworksCmd.Flags().Bool("all", false, "remove all unused Docker networks (not just ene networks)")
+	cleanupCmd.Flags().Bool("dry-run", false, "show what would be removed without actually removing")
+	cleanupCmd.Flags().Bool("force", false, "skip confirmation prompt")
+	cleanupCmd.Flags().Bool("all", false, "include all matching resources, even if in use")
+	cleanupCmd.Flags().String("older-than", "", "only clean resources older than this duration (e.g., 1h, 30m)")
+	cleanupCmd.Flags().BoolP("verbose", "v", false, "show detailed information about resources")
 
 	rootCmd.AddCommand(scaffoldTestCmd)
 	rootCmd.AddCommand(dryRunCmd)
 	rootCmd.AddCommand(listSuitesCmd)
-	rootCmd.AddCommand(cleanupNetworksCmd)
+	rootCmd.AddCommand(cleanupCmd)
 	rootCmd.AddCommand(versionCmd)
 
 	// Add custom completion for --suite flag

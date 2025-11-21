@@ -323,6 +323,9 @@ type TestSuiteV1 struct {
 	TestSuiteTests []TestSuiteTest
 	RelativePath   string // Relative path to the test suite file
 	WorkingDir     string // Working directory for the test suite, used for relative paths
+
+	// cleanupRegistry is the central registry for tracking cleanable resources
+	cleanupRegistry *CleanupRegistry
 }
 
 // NewTestSuiteV1 creates a new test suite with the given name, kind, units, target, and tests.
@@ -680,6 +683,9 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 	var passedTests, failedTests, skippedTests int
 	var totalTestTime time.Duration
 
+	// Create cleanup registry for centralized resource management
+	t.cleanupRegistry = NewCleanupRegistry()
+
 	// Calculate environment variable dependencies
 	varDependencies, err := t.calculateEnvDependencies()
 	if err != nil {
@@ -707,6 +713,10 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		EventNetworkCreated,
 		fmt.Sprintf("Network %s created", net.Name),
 	)
+
+	// Register network with cleanup registry
+	cleanableNet := NewCleanableNetwork(net)
+	t.cleanupRegistry.Register(cleanableNet)
 
 	if err = t.interpolateVarsAndStartUnits(ctx, opts, reorderedUnits, varDependencies, net); err != nil {
 		return fmt.Errorf("interpolate vars and start units: %w", err)
@@ -749,10 +759,35 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 		t.sendEvent(
 			opts.EventSink,
 			EventInfo,
-			"Cleaning up containers...",
+			"Cleaning up resources via CleanupRegistry...",
 		)
 
-		// Stop all units and wait for them to fully terminate
+		// Use CleanupRegistry for centralized cleanup
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cleanupCancel()
+
+		if err := t.cleanupRegistry.CleanupAll(cleanupCtx); err != nil {
+			t.sendEvent(
+				opts.EventSink,
+				EventWarning,
+				fmt.Sprintf("CleanupRegistry errors: %v", err),
+			)
+			fmt.Printf("Warning: Some resources failed to cleanup: %v\n", err)
+		} else {
+			t.sendEvent(
+				opts.EventSink,
+				EventInfo,
+				"All resources cleaned up successfully",
+			)
+		}
+
+		// Fallback: Stop all units directly (for any units not registered)
+		t.sendEvent(
+			opts.EventSink,
+			EventInfo,
+			"Running fallback cleanup for any remaining units...",
+		)
+
 		stoppedUnits := 0
 		failedUnits := []string{}
 		for i := len(reorderedUnits) - 1; i >= 0; i-- {
@@ -761,15 +796,12 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 				continue
 			}
 
-			t.sendEvent(
-				opts.EventSink,
-				EventContainerStopped,
-				fmt.Sprintf("Stopping %s", unit.Name()),
-			)
-
+			// Try to stop the unit (idempotent - will skip if already terminated)
 			if err := unit.Stop(); err != nil {
-				failedUnits = append(failedUnits, unit.Name())
-				fmt.Printf("Warning: failed to stop unit %s: %v\n", unit.Name(), err)
+				// Only log as warning if it's not already terminated
+				if !strings.Contains(err.Error(), "No such container") {
+					failedUnits = append(failedUnits, unit.Name())
+				}
 			} else {
 				stoppedUnits++
 			}
@@ -779,23 +811,11 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 			t.sendEvent(
 				opts.EventSink,
 				EventWarning,
-				fmt.Sprintf("Failed to stop %d units: %v", len(failedUnits), failedUnits),
-			)
-		} else {
-			t.sendEvent(
-				opts.EventSink,
-				EventInfo,
-				fmt.Sprintf("Successfully stopped %d units", stoppedUnits),
+				fmt.Sprintf("Fallback cleanup: failed to stop %d units: %v", len(failedUnits), failedUnits),
 			)
 		}
 
 		// Wait for containers to actually terminate (with configurable timeout)
-		t.sendEvent(
-			opts.EventSink,
-			EventInfo,
-			"Waiting for containers to terminate...",
-		)
-
 		startWait := time.Now()
 		terminationTimeout := 30 * time.Second
 		if err := WaitForContainersTermination(ctx, net, terminationTimeout); err != nil {
@@ -804,37 +824,16 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 				EventWarning,
 				fmt.Sprintf("Container termination timeout after %v: %v", time.Since(startWait), err),
 			)
-			fmt.Printf("Warning: %v\n", err)
-			// Continue anyway - ForceCleanupNetwork will do best effort cleanup
-		} else {
-			t.sendEvent(
-				opts.EventSink,
-				EventInfo,
-				fmt.Sprintf("All containers terminated in %v", time.Since(startWait)),
-			)
+			// Continue anyway - network cleanup already attempted via registry
 		}
 
-		t.sendEvent(
-			opts.EventSink,
-			EventInfo,
-			fmt.Sprintf("Removing network %s...", net.Name),
-		)
-
+		// Fallback network cleanup (should already be done by registry, but just in case)
 		if err := ForceCleanupNetwork(ctx, net); err != nil {
-			t.sendEvent(
-				opts.EventSink,
-				EventWarning,
-				fmt.Sprintf("Failed to cleanup network %s: %v", net.Name, err),
-			)
-			fmt.Printf("\nWarning: Failed to cleanup network %s: %v\n", net.Name, err)
-			fmt.Printf("To manually cleanup, run: docker network rm %s\n", net.Name)
-			fmt.Printf("Or to cleanup all unused networks: docker network prune -f\n")
-		} else {
-			t.sendEvent(
-				opts.EventSink,
-				EventNetworkDestroyed,
-				fmt.Sprintf("Network %s destroyed", net.Name),
-			)
+			// Only log if it's a real error, not "network not found"
+			if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "No such network") {
+				fmt.Printf("\nWarning: Fallback network cleanup failed: %v\n", err)
+				fmt.Printf("To manually cleanup, run: docker network rm %s\n", net.Name)
+			}
 		}
 	}()
 
@@ -1035,14 +1034,15 @@ func (t *TestSuiteV1) interpolateVarsAndStartUnits(
 		unit.SetEnvs(envVars)
 
 		if err = unit.Start(ctx, &UnitStartOptions{
-			Network:      net,
-			Verbose:      opts.Verbose,
-			CacheImages:  true,
-			CleanupCache: opts.CleanupCache,
-			EventSink:    opts.EventSink,
-			Fixtures:     t.Fixtures,
-			Debug:        opts.Debug,
-			WorkingDir:   t.RelativePath,
+			Network:         net,
+			Verbose:         opts.Verbose,
+			CacheImages:     true,
+			CleanupCache:    opts.CleanupCache,
+			EventSink:       opts.EventSink,
+			Fixtures:        t.Fixtures,
+			Debug:           opts.Debug,
+			WorkingDir:      t.RelativePath,
+			CleanupRegistry: t.cleanupRegistry,
 		}); err != nil {
 			err = fmt.Errorf("start unit %s: %w", unit.Name(), err)
 

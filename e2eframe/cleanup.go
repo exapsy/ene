@@ -13,6 +13,21 @@ import (
 // CleanupOrphanedNetworks removes Docker networks that were left behind by ene tests.
 // If all is true, it will prune all unused Docker networks (equivalent to docker network prune).
 // Otherwise, it only removes networks created by testcontainers (identified by name pattern).
+//
+// Deprecated: Use the new `ene cleanup` CLI command instead, which provides better
+// resource ordering, type-safe cleanup, and richer filtering options.
+// This function is maintained for backward compatibility but will be removed in a future version.
+//
+// Migration:
+//
+//	Old: CleanupOrphanedNetworks(ctx, false)
+//	New: Use CLI: `ene cleanup networks --force`
+//
+//	Old: CleanupOrphanedNetworks(ctx, true)
+//	New: Use CLI: `ene cleanup --all --force`
+//
+// For programmatic cleanup, use CleanupRegistry and ResourceDiscoverer instead.
+// See CLEANUP_ARCHITECTURE.md and MIGRATION_GUIDE.md for details.
 func CleanupOrphanedNetworks(ctx context.Context, all bool) error {
 	dockerCli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {

@@ -163,6 +163,12 @@ func (m *MongoUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) 
 
 	m.container = cont
 
+	// Register container with cleanup registry if provided
+	if opts.CleanupRegistry != nil {
+		cleanableContainer := e2eframe.NewCleanableContainer(cont, m.serviceName)
+		opts.CleanupRegistry.Register(cleanableContainer)
+	}
+
 	// Emit started event
 	m.sendEvent(opts.EventSink, e2eframe.EventContainerStarted,
 		fmt.Sprintf("MongoDB container %s started", m.serviceName))

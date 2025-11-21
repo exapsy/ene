@@ -76,6 +76,9 @@ type UnitStartOptions struct {
 	EventSink EventSink
 	// WorkingDir is the base directory
 	WorkingDir string
+	// CleanupRegistry is the central registry for tracking cleanable resources.
+	// Units should register their containers/networks here for coordinated cleanup.
+	CleanupRegistry *CleanupRegistry
 }
 
 type GetEnvRawOptions struct {
