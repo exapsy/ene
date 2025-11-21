@@ -24,21 +24,22 @@ ENE uses YAML format for test configuration. Each test suite must have a `suite.
 kind: e2e_test:v1
 name: my-test-suite
 
+# Fixtures can be either array or map format
 fixtures:
-  - name: fixture_name
-    value: fixture_value
+  - fixture_name: fixture_value  # Array format
+  # OR
+fixtures:
+  fixture_name: fixture_value     # Map format
 
 units:
   - name: service_name
     kind: service_type
-    # ... service configuration
 
 target: target_service_name
 
 tests:
   - name: test_name
     kind: test_type
-    # ... test configuration
 ```
 
 ---
@@ -121,8 +122,7 @@ Fixtures are reusable values that can be referenced throughout the configuration
 
 ```yaml
 fixtures:
-  - name: api_key
-    value: test-key-12345
+  - api_key: test-key-12345
 ```
 
 **Fields:**
@@ -133,8 +133,7 @@ fixtures:
 
 ```yaml
 fixtures:
-  - name: test_user
-    file: ./testdata/user.json
+  - test_user: { file: ./testdata/user.json }
 ```
 
 **Fields:**
@@ -143,12 +142,26 @@ fixtures:
 
 ### Usage Example
 
+**Array format:**
 ```yaml
 fixtures:
-  - name: content_type
-    value: application/json; charset=utf-8
-  - name: test_payload
-    file: ./data/payload.json
+  - content_type: application/json; charset=utf-8
+  - test_payload: { file: ./data/payload.json }
+
+tests:
+  - name: create resource
+    kind: http
+    request:
+      headers:
+        Content-Type: "{{ content_type }}"
+      body: "{{ test_payload }}"
+```
+
+**Map format:**
+```yaml
+fixtures:
+  content_type: application/json; charset=utf-8
+  test_payload: { file: ./data/payload.json }
 
 tests:
   - name: create resource
@@ -761,12 +774,23 @@ ENE supports variable interpolation using `{{ variable_name }}` syntax.
 
 ### Fixture Interpolation
 
-Reference fixtures defined in the `fixtures` section.
-
+**Array format:**
 ```yaml
 fixtures:
-  - name: api_key
-    value: test-key-123
+  - api_key: test-key-123
+
+tests:
+  - name: test
+    kind: http
+    request:
+      headers:
+        Authorization: "Bearer {{ api_key }}"
+```
+
+**Map format:**
+```yaml
+fixtures:
+  api_key: test-key-123
 
 tests:
   - name: test
@@ -838,20 +862,19 @@ Reference properties of defined units using `{{ unit_name.property }}` syntax.
 
 ### Interpolation Examples
 
+**Array format:**
 ```yaml
 fixtures:
-  - name: api_version
-    value: v1
+  - api_version: v1
 
 units:
   - name: database
     kind: mongo
-  
+    # ...
   - name: app
     kind: http
     env:
-      - DATABASE_URL={{ database.dsn }}
-      - API_VERSION={{ api_version }}
+      - DB_URI: "{{ database.local_uri }}"
 
 tests:
   - name: test
@@ -859,7 +882,30 @@ tests:
     request:
       path: /api/{{ api_version }}/users
       headers:
-        X-Database: "{{ database.host }}"
+        X-Database: "{{ database.local_uri }}"
+```
+
+**Map format:**
+```yaml
+fixtures:
+  api_version: v1
+
+units:
+  - name: database
+    kind: mongo
+    # ...
+  - name: app
+    kind: http
+    env:
+      - DB_URI: "{{ database.local_uri }}"
+
+tests:
+  - name: test
+    kind: http
+    request:
+      path: /api/{{ api_version }}/users
+      headers:
+        X-Database: "{{ database.local_uri }}"
 ```
 
 ---
@@ -896,11 +942,10 @@ Examples: `5s`, `2m`, `1h30m`, `2d`
 kind: e2e_test:v1
 name: complete-example
 
+# Using map format (array format also works)
 fixtures:
-  - name: content_type
-    value: application/json; charset=utf-8
-  - name: test_user
-    file: ./testdata/user.json
+  content_type: application/json; charset=utf-8
+  test_user: { file: ./testdata/user.json }
 
 units:
   - name: mongodb

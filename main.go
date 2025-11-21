@@ -556,8 +556,7 @@ func ScaffoldTest(testName string, templates []string) error {
 name: %s
 
 fixtures:
-  - name: content_type_inline
-    value: application/json; charset=utf-8
+  - content_type_inline: application/json; charset=utf-8
 
 units:
 %s

@@ -55,13 +55,12 @@ func TestHumanizeFieldPath(t *testing.T) {
 			want: "test 'ping' (tests[2])",
 		},
 		{
-			name:      "fixture with name",
+			name:      "fixture with key",
 			fieldPath: "fixtures.0",
 			yamlData: map[string]interface{}{
 				"fixtures": []interface{}{
 					map[string]interface{}{
-						"name":  "my_fixture",
-						"value": "test",
+						"my_fixture": "test",
 					},
 				},
 			},

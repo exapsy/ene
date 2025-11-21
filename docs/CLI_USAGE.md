@@ -421,10 +421,8 @@ name: my-test-suite
 
 # Fixtures: Reusable data values
 fixtures:
-  - name: content_type_inline
-    value: application/json; charset=utf-8
-  - name: api_key
-    value: test-key-12345
+  - content_type_inline: application/json; charset=utf-8
+  - api_key: test-key-12345
 
 # Units: Services/containers to spin up
 units:
@@ -679,12 +677,9 @@ Fixtures allow you to define reusable values that can be interpolated in your te
 
 ```yaml
 fixtures:
-  - name: api_base
-    value: http://api.example.com
-  - name: auth_token
-    value: Bearer abc123
-  - name: test_data
-    file: ./testdata/user.json  # Load from file
+  - api_base: http://api.example.com
+  - auth_token: Bearer abc123
+  - test_data: { file: ./testdata/user.json }  # Load from file
 
 # Use fixtures with {{ fixture_name }}
 tests:

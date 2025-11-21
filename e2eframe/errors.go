@@ -176,9 +176,16 @@ func humanizeFieldPath(fieldPath string, yamlData interface{}) string {
 				if array, ok := dataMap[arrayName].([]interface{}); ok {
 					if idx := parseIndex(index); idx >= 0 && idx < len(array) {
 						if item, ok := array[idx].(map[string]interface{}); ok {
+							// Check for old format with "name" field
 							if name, ok := item["name"].(string); ok {
 								singularName := strings.TrimSuffix(arrayName, "s")
 								return fmt.Sprintf("%s '%s' (%s[%s])", singularName, name, arrayName, index)
+							}
+							// Check for new fixture format (single-key map)
+							if arrayName == "fixtures" && len(item) == 1 {
+								for key := range item {
+									return fmt.Sprintf("fixture '%s' (fixtures[%s])", key, index)
+								}
 							}
 						}
 					}

@@ -824,6 +824,10 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 
 	// Start all units (containers, services, etc.)
 	if err = t.interpolateVarsAndStartUnits(ctx, opts, reorderedUnits, varDependencies, net); err != nil {
+		// Check if this is a migration error - if so, return it directly for cleaner output
+		if strings.Contains(err.Error(), "migration failed in") {
+			return err
+		}
 		return fmt.Errorf("interpolate vars and start units: %w", err)
 	}
 
@@ -1110,7 +1114,13 @@ func (t *TestSuiteV1) interpolateVarsAndStartUnits(
 			SuiteName:       t.TestName,
 			CleanupRegistry: t.cleanupRegistry,
 		}); err != nil {
-			err = fmt.Errorf("start unit %s: %w", unit.Name(), err)
+			// Check if this is a migration error and format it cleanly
+			if strings.Contains(err.Error(), "migration failed in") {
+				// Migration errors are already well-formatted, don't add extra wrapping
+				err = fmt.Errorf("failed to start %s: %w", unit.Name(), err)
+			} else {
+				err = fmt.Errorf("start unit %s: %w", unit.Name(), err)
+			}
 
 			break
 		}

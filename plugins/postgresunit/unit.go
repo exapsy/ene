@@ -228,7 +228,8 @@ func (p *PostgresUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOption
 	// Run migrations if specified
 	if p.MigrationsPath != "" {
 		if err := p.runMigrations(ctx, opts.WorkingDir); err != nil {
-			return fmt.Errorf("run migrations: %w", err)
+			// Return migration error directly without extra wrapping
+			return err
 		}
 	}
 
@@ -383,7 +384,8 @@ func (p *PostgresUnit) runMigrations(ctx context.Context, workingDir string) err
 	// Sort files to ensure they run in order
 	for _, file := range files {
 		if err := p.runSQLFile(ctx, file); err != nil {
-			return fmt.Errorf("run migration %s: %w", filepath.Base(file), err)
+			// Return the error directly - it already contains the filename
+			return err
 		}
 	}
 
@@ -415,9 +417,25 @@ func (p *PostgresUnit) runSQLFile(ctx context.Context, filePath string) error {
 	output := string(outputBytes)
 
 	if exitCode != 0 {
-		// Include both the SQL file name and the actual error output
-		return fmt.Errorf("SQL execution failed with exit code %d\nFile: %s\nError output:\n%s",
-			exitCode, filepath.Base(filePath), strings.TrimSpace(output))
+		// Extract just the ERROR lines from output for cleaner error messages
+		errorLines := []string{}
+		for _, line := range strings.Split(output, "\n") {
+			trimmed := strings.TrimSpace(line)
+			// Only include ERROR lines, skip NOTICE lines
+			if strings.HasPrefix(trimmed, "ERROR:") ||
+				(len(errorLines) > 0 && trimmed != "") {
+				errorLines = append(errorLines, trimmed)
+			}
+		}
+
+		errorMsg := strings.Join(errorLines, "\n")
+		if errorMsg == "" {
+			// Fallback if no ERROR: lines found
+			errorMsg = strings.TrimSpace(output)
+		}
+
+		return fmt.Errorf("migration failed in %s:\n%s",
+			filepath.Base(filePath), errorMsg)
 	}
 
 	return nil

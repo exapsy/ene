@@ -121,8 +121,7 @@ kind: e2e_test:v1
 name: my-test
 
 fixtures:
-  - name: api_key
-    value: test-123
+  - api_key: test-123
 
 units:
   - name: app
@@ -356,13 +355,11 @@ header_asserts:
 ```yaml
 # Inline value
 fixtures:
-  - name: api_key
-    value: test-key-123
+  - api_key: test-key-123
 
 # From file
 fixtures:
-  - name: test_data
-    file: ./testdata/data.json
+  - test_data: { file: ./testdata/data.json }
 
 # Usage
 tests:

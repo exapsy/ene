@@ -70,10 +70,8 @@ kind: e2e_test:v1
 name: user-crud
 
 fixtures:
-  - name: api_version
-    value: v1
-  - name: user_id
-    value: "12345"
+  - api_version: v1
+  - user_id: "12345"
 
 units:
   - name: api
@@ -184,12 +182,9 @@ kind: e2e_test:v1
 name: auth-flow
 
 fixtures:
-  - name: username
-    value: testuser
-  - name: password
-    value: testpass123
-  - name: auth_token
-    value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
+  - username: testuser
+  - password: testpass123
+  - auth_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
 
 units:
   - name: auth-api
@@ -511,8 +506,7 @@ kind: e2e_test:v1
 name: microservices
 
 fixtures:
-  - name: correlation_id
-    value: test-12345
+  - correlation_id: test-12345
 
 units:
   # Database
@@ -739,12 +733,9 @@ kind: e2e_test:v1
 name: env-specific
 
 fixtures:
-  - name: env
-    value: test
-  - name: api_host
-    value: localhost
-  - name: log_level
-    value: debug
+  - env: test
+  - api_host: localhost
+  - log_level: debug
 
 units:
   - name: app

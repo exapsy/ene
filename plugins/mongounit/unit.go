@@ -269,6 +269,9 @@ func (m *MongoUnit) WaitForReady(_ context.Context) error {
 }
 
 func (m *MongoUnit) Stop() error {
+	if m.container == nil {
+		return nil
+	}
 	return m.container.Terminate(context.Background())
 }
 

@@ -13,7 +13,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "description": "A fixture can be a simple key-value pair (e.g., userid: 5432) or a complex object with a file field",
+        "description": "A fixture is a single key-value mapping. Format: '- fixtureName: value' for inline values or '- fixtureName: { file: ./path.json }' for file-based fixtures. Example: '- api_key: test-123' or '- test_data: { file: ./data.json }'",
         "minProperties": 1,
         "maxProperties": 1,
         "additionalProperties": {

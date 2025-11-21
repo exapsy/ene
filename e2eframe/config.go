@@ -85,19 +85,48 @@ func (t *TestSuiteConfigV1) UnmarshalYAML(node *yaml.Node) error {
 				return err
 			}
 		case "fixtures":
-			if value.Kind != yaml.SequenceNode {
-				return fmt.Errorf("expected sequence node to yaml sequence, got: %v", value.Kind)
-			}
+			// Support both array and map formats for fixtures
+			if value.Kind == yaml.SequenceNode {
+				// Array format: - key: value
+				for i := 0; i < len(value.Content); i++ {
+					fixture := &FixtureV1{RelativePath: t.RelativePath}
+					fixtureValue := value.Content[i]
 
-			for i := 0; i < len(value.Content); i++ {
-				fixture := &FixtureV1{RelativePath: t.RelativePath}
-				fixtureValue := value.Content[i]
+					if err := fixtureValue.Decode(fixture); err != nil {
+						return err
+					}
 
-				if err := fixtureValue.Decode(fixture); err != nil {
-					return err
+					t.Fixtures = append(t.Fixtures, fixture)
 				}
+			} else if value.Kind == yaml.MappingNode {
+				// Map format: key: value (direct mapping)
+				// Convert the mapping node into individual fixtures
+				for i := 0; i < len(value.Content); i += 2 {
+					keyNode := value.Content[i]
+					valueNode := value.Content[i+1]
 
-				t.Fixtures = append(t.Fixtures, fixture)
+					fixture := &FixtureV1{
+						RelativePath: t.RelativePath,
+						FixtureName:  keyNode.Value,
+					}
+
+					// Handle both scalar values and file references
+					if valueNode.Kind == yaml.ScalarNode {
+						fixture.FixtureValue = valueNode.Value
+					} else if valueNode.Kind == yaml.MappingNode {
+						// Look for "file" key
+						for j := 0; j < len(valueNode.Content); j += 2 {
+							if valueNode.Content[j].Value == "file" {
+								fixture.FixtureFile = valueNode.Content[j+1].Value
+								break
+							}
+						}
+					}
+
+					t.Fixtures = append(t.Fixtures, fixture)
+				}
+			} else {
+				return fmt.Errorf("fixtures must be either a sequence (array) or mapping (object), got: %v", value.Kind)
 			}
 		case "units":
 			if value.Kind != yaml.SequenceNode {
