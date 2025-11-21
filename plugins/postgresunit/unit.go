@@ -251,6 +251,55 @@ func (p *PostgresUnit) Stop() error {
 	return p.container.Terminate(context.Background())
 }
 
+// SaveRuntimeLogs captures and saves the current container logs to a file.
+// This is useful for debugging test failures where the container is running
+// but the test logic fails. Returns the path to the saved log file.
+func (p *PostgresUnit) SaveRuntimeLogs(suiteName, reason string) (string, error) {
+	if p.container == nil {
+		return "", fmt.Errorf("container not started")
+	}
+
+	// Create log directory at project root .ene/<suite-name>/
+	logDir := filepath.Join(".ene", suiteName)
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create log directory: %w", err)
+	}
+
+	// Generate log file path
+	timestamp := time.Now().Format("20060102-150405")
+	logFilePath := filepath.Join(logDir, fmt.Sprintf("test-failure-%s-%s.log", p.serviceName, timestamp))
+
+	// Capture container logs
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	logReader, err := p.container.Logs(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get container logs: %w", err)
+	}
+	defer logReader.Close()
+
+	logBytes, err := io.ReadAll(logReader)
+	if err != nil {
+		return "", fmt.Errorf("failed to read container logs: %w", err)
+	}
+
+	// Create log file content with header
+	logContent := fmt.Sprintf("=== Test Failure Log ===\n")
+	logContent += fmt.Sprintf("Container: %s\n", p.serviceName)
+	logContent += fmt.Sprintf("Timestamp: %s\n", time.Now().Format(time.RFC3339))
+	logContent += fmt.Sprintf("Reason: %s\n", reason)
+	logContent += fmt.Sprintf("\n=== Container Logs ===\n")
+	logContent += string(logBytes)
+
+	// Write to file
+	if err := os.WriteFile(logFilePath, []byte(logContent), 0644); err != nil {
+		return "", fmt.Errorf("failed to write log file: %w", err)
+	}
+
+	return logFilePath, nil
+}
+
 func (p *PostgresUnit) ExternalEndpoint() string {
 	if p.container == nil {
 		return ""
@@ -286,6 +335,9 @@ func (p *PostgresUnit) Get(variable string) (string, error) {
 			return "", fmt.Errorf("get postgres host: %w", err)
 		}
 		return host, nil
+	case "hostname":
+		// Return the service name for internal container-to-container connections
+		return p.serviceName, nil
 	case "port":
 		if p.container == nil {
 			return "", fmt.Errorf("postgres container not started")
@@ -295,9 +347,12 @@ func (p *PostgresUnit) Get(variable string) (string, error) {
 			return "", fmt.Errorf("get postgres port: %w", err)
 		}
 		return port.Port(), nil
+	case "internal_port", "app_port":
+		// Return the internal port for container-to-container connections
+		return fmt.Sprintf("%d", p.appPort), nil
 	case "database":
 		return p.database, nil
-	case "user":
+	case "user", "username":
 		return p.user, nil
 	case "password":
 		return p.password, nil

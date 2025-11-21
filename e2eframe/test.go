@@ -900,6 +900,10 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 			totalTestTime += result.Duration
 			if !result.Passed {
 				failedTests++
+
+				// Capture container logs from all units that support it
+				t.captureLogsOnFailure(opts, result.TestName, result.MessageOrErr())
+
 				t.sendTestEvent(
 					opts.EventSink,
 					result.TestName,
@@ -935,6 +939,34 @@ func (t *TestSuiteV1) Run(ctx context.Context, opts *RunTestOptions) error {
 	}
 
 	return nil
+}
+
+// captureLogsOnFailure saves runtime logs from all units that support log capture
+// when a test fails. This helps with debugging test failures.
+func (t *TestSuiteV1) captureLogsOnFailure(opts *RunTestOptions, testName, failureReason string) {
+	reason := fmt.Sprintf("Test '%s' failed: %s", testName, failureReason)
+
+	var savedLogPaths []string
+
+	// Iterate through all units and capture logs from those that support it
+	for _, unit := range t.TestUnits {
+		if logSaver, ok := unit.(LogSaver); ok {
+			logPath, err := logSaver.SaveRuntimeLogs(t.TestName, reason)
+			if err != nil {
+				fmt.Printf("Warning: failed to save logs for unit %s: %v\n", unit.Name(), err)
+			} else {
+				savedLogPaths = append(savedLogPaths, logPath)
+			}
+		}
+	}
+
+	// Notify user about saved logs
+	if len(savedLogPaths) > 0 {
+		fmt.Printf("  📋 Container logs saved for debugging:\n")
+		for _, path := range savedLogPaths {
+			fmt.Printf("     • %s\n", path)
+		}
+	}
 }
 
 func (t *TestSuiteV1) sendTestRetryEvent(
@@ -1042,6 +1074,7 @@ func (t *TestSuiteV1) interpolateVarsAndStartUnits(
 			Fixtures:        t.Fixtures,
 			Debug:           opts.Debug,
 			WorkingDir:      t.RelativePath,
+			SuiteName:       t.TestName,
 			CleanupRegistry: t.cleanupRegistry,
 		}); err != nil {
 			err = fmt.Errorf("start unit %s: %w", unit.Name(), err)

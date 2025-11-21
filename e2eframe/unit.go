@@ -76,6 +76,8 @@ type UnitStartOptions struct {
 	EventSink EventSink
 	// WorkingDir is the base directory
 	WorkingDir string
+	// SuiteName is the name of the test suite (for log organization)
+	SuiteName string
 	// CleanupRegistry is the central registry for tracking cleanable resources.
 	// Units should register their containers/networks here for coordinated cleanup.
 	CleanupRegistry *CleanupRegistry
@@ -113,6 +115,17 @@ type Unit interface {
 
 	// SetEnvs sets the environment variables for the service.
 	SetEnvs(env map[string]string)
+}
+
+// LogSaver is an optional interface that units can implement to support
+// saving runtime logs when tests fail. This is useful for debugging test
+// failures where the container is running but the test logic fails.
+type LogSaver interface {
+	// SaveRuntimeLogs captures and saves the current container logs to a file.
+	// The suiteName parameter is the test suite name for organizing logs under .ene/<suite-name>/
+	// The reason parameter describes why the logs are being saved (e.g., "test failed").
+	// Returns the path to the saved log file and any error encountered.
+	SaveRuntimeLogs(suiteName, reason string) (string, error)
 }
 
 type unitFactory func(node *yaml.Node) (Unit, error)

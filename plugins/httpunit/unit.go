@@ -477,7 +477,8 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 	logCapture := &httpLogConsumer{unit: s}
 
 	// Create log file for capturing build output
-	logDir := filepath.Join(opts.WorkingDir, ".ene", "logs")
+	// Use project root .ene/<suite-name>/ directory
+	logDir := filepath.Join(".ene", opts.SuiteName)
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		fmt.Printf("Warning: failed to create log directory: %v\n", err)
 	}
@@ -508,6 +509,17 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 			buildLogWriter = &s.buildLogs
 		}
 		logConsumers = []testcontainers.LogConsumer{logCapture}
+	}
+
+	// Create a buffer to capture container runtime logs
+	var runtimeLogBuffer strings.Builder
+	runtimeLogMutex := &sync.Mutex{}
+	runtimeLogCapture := &containerLogCapture{
+		buffer: &runtimeLogBuffer,
+		mutex:  runtimeLogMutex,
+	}
+	if !opts.Verbose && !opts.Debug {
+		logConsumers = append(logConsumers, runtimeLogCapture)
 	}
 
 	// Cleanup old cached images if requested
@@ -642,11 +654,22 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 				logBytes, readErr := io.ReadAll(logReader)
 				if readErr == nil && len(logBytes) > 0 {
 					if buildLogStr != "" {
-						buildLogStr += "\n"
+						buildLogStr += "\n=== Container Runtime Logs ===\n"
 					}
 					buildLogStr += string(logBytes)
 				}
 			}
+		}
+
+		// Also add captured runtime logs from the log consumer
+		runtimeLogMutex.Lock()
+		runtimeLogs := runtimeLogBuffer.String()
+		runtimeLogMutex.Unlock()
+		if runtimeLogs != "" {
+			if buildLogStr != "" {
+				buildLogStr += "\n=== Application Output ===\n"
+			}
+			buildLogStr += runtimeLogs
 		}
 
 		// Extract detailed error information from the error message
@@ -816,6 +839,55 @@ func (s *HTTPUnit) Stop() error {
 	return nil
 }
 
+// SaveRuntimeLogs captures and saves the current container logs to a file.
+// This is useful for debugging test failures where the container is running
+// but the test logic fails. Returns the path to the saved log file.
+func (s *HTTPUnit) SaveRuntimeLogs(suiteName, reason string) (string, error) {
+	if s.cont == nil {
+		return "", fmt.Errorf("container not started")
+	}
+
+	// Create log directory at project root .ene/<suite-name>/
+	logDir := filepath.Join(".ene", suiteName)
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create log directory: %w", err)
+	}
+
+	// Generate log file path
+	timestamp := time.Now().Format("20060102-150405")
+	logFilePath := filepath.Join(logDir, fmt.Sprintf("test-failure-%s-%s.log", s.name, timestamp))
+
+	// Capture container logs
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	logReader, err := s.cont.Logs(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get container logs: %w", err)
+	}
+	defer logReader.Close()
+
+	logBytes, err := io.ReadAll(logReader)
+	if err != nil {
+		return "", fmt.Errorf("failed to read container logs: %w", err)
+	}
+
+	// Create log file content with header
+	logContent := fmt.Sprintf("=== Test Failure Log ===\n")
+	logContent += fmt.Sprintf("Container: %s\n", s.name)
+	logContent += fmt.Sprintf("Timestamp: %s\n", time.Now().Format(time.RFC3339))
+	logContent += fmt.Sprintf("Reason: %s\n", reason)
+	logContent += fmt.Sprintf("\n=== Container Logs ===\n")
+	logContent += string(logBytes)
+
+	// Write to file
+	if err := os.WriteFile(logFilePath, []byte(logContent), 0644); err != nil {
+		return "", fmt.Errorf("failed to write log file: %w", err)
+	}
+
+	return logFilePath, nil
+}
+
 func (s *HTTPUnit) ExternalEndpoint() string {
 	return fmt.Sprintf("http://localhost:%d", s.Port)
 }
@@ -904,6 +976,17 @@ func UnmarshallUnit(node *yaml.Node) (e2eframe.Unit, error) {
 // It's not yet utilized. The goal is to record the logs to a file in case of test failures,.
 type httpLogConsumer struct {
 	unit *HTTPUnit
+}
+
+type containerLogCapture struct {
+	buffer *strings.Builder
+	mutex  *sync.Mutex
+}
+
+func (c *containerLogCapture) Accept(log testcontainers.Log) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.buffer.WriteString(string(log.Content))
 }
 
 func (c *httpLogConsumer) Accept(log testcontainers.Log) {
