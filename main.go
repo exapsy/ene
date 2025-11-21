@@ -43,10 +43,11 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:     "ene",
+	Use:     "ene [path]",
 	Short:   "Run e2e tests or scaffold a new suite",
 	Long:    `When called with no sub-command, runs all e2e tests. Use "ene scaffold-test" to create a new suite.`,
 	Version: version,
+	Args:    cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		verbose := cmd.Flag("verbose").Value.String()
 		pretty := cmd.Flag("pretty").Value.String()
@@ -58,6 +59,11 @@ var rootCmd = &cobra.Command{
 		htmlReportPath := cmd.Flag("html").Value.String()
 		jsonReportPath := cmd.Flag("json").Value.String()
 		baseDir := cmd.Flag("base-dir").Value.String()
+
+		// Prioritize positional argument over --base-dir flag
+		if len(args) > 0 {
+			baseDir = args[0]
+		}
 
 		isVerbose := verbose == "true"
 		isPretty := pretty == "true"
@@ -259,7 +265,7 @@ var scaffoldTestCmd = &cobra.Command{
 }
 
 var dryRunCmd = &cobra.Command{
-	Use:   "dry-run [test-file]",
+	Use:   "dry-run [path]",
 	Args:  cobra.MaximumNArgs(1),
 	Short: "Validate test configuration without running containers",
 	Long:  `Parse and validate test configuration files to check for syntax errors and plugin compatibility`,
@@ -273,7 +279,14 @@ var dryRunCmd = &cobra.Command{
 
 		var testFile string
 		if len(args) > 0 {
-			testFile = args[0]
+			// Positional arg can be either a test file or a directory
+			// If --base-dir flag is not set, use the positional arg as baseDir
+			if baseDir == "" {
+				baseDir = args[0]
+			} else {
+				// If --base-dir is set, treat positional arg as test file
+				testFile = args[0]
+			}
 		}
 
 		err := e2eframe.DryRun(context.Background(), &e2eframe.DryRunOpts{
@@ -292,11 +305,17 @@ var dryRunCmd = &cobra.Command{
 }
 
 var listSuitesCmd = &cobra.Command{
-	Use:   "list-suites",
+	Use:   "list-suites [path]",
 	Short: "List all available test suites",
 	Long:  `List all test suites found in the tests directory`,
+	Args:  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		baseDir := cmd.Flag("base-dir").Value.String()
+
+		// Prioritize positional argument over --base-dir flag
+		if len(args) > 0 {
+			baseDir = args[0]
+		}
 
 		suiteNames, err := e2eframe.ListTestSuiteNames(baseDir)
 		if err != nil {
@@ -604,11 +623,10 @@ func init() {
 	rootCmd.Flags().Bool("pretty", true, "pretty print output")
 	rootCmd.Flags().Bool("debug", false, "enable debug mode")
 	rootCmd.Flags().Bool("parallel", false, "run tests in parallel")
-	rootCmd.Flags().
-		String("suite", "", "run specific test suites (comma-separated), e.g. 'ene --suite=suite1,suite2' or partial matches 'ene --suite=TestService_,_Function'")
+	rootCmd.Flags().String("suite", "", "run specific test suites (comma-separated), e.g. 'ene --suite=suite1,suite2' or partial matches 'ene --suite=TestService_,_Function'")
 	rootCmd.Flags().String("html", "", "generate HTML report to this path") // new
 	rootCmd.Flags().String("json", "", "generate JSON report to this path")
-	rootCmd.Flags().String("base-dir", "", "base directory for tests, defaults to current directory")
+	rootCmd.Flags().String("base-dir", "", "(deprecated: use positional arg instead) base directory for tests, defaults to current directory")
 	rootCmd.Flags().Bool("cleanup-cache", false, "cleanup old cached Docker images to prevent bloat")
 
 	scaffoldTestCmd.Flags().
@@ -616,9 +634,9 @@ func init() {
 
 	dryRunCmd.Flags().BoolP("verbose", "v", false, "enable detailed logs")
 	dryRunCmd.Flags().Bool("debug", false, "enable debug mode")
-	dryRunCmd.Flags().String("base-dir", "", "base directory for tests, defaults to current directory")
+	dryRunCmd.Flags().String("base-dir", "", "(deprecated: use positional arg instead) base directory for tests, defaults to current directory")
 
-	listSuitesCmd.Flags().String("base-dir", "", "base directory for tests, defaults to current directory")
+	listSuitesCmd.Flags().String("base-dir", "", "(deprecated: use positional arg instead) base directory for tests, defaults to current directory")
 
 	cleanupCmd.Flags().Bool("dry-run", false, "show what would be removed without actually removing")
 	cleanupCmd.Flags().Bool("force", false, "skip confirmation prompt")

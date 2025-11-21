@@ -104,6 +104,9 @@ Run your test:
 ene dry-run
 
 # Run the test
+ene
+
+# Run with verbose output
 ene --verbose
 
 # Run with HTML report
@@ -112,11 +115,13 @@ ene --html=report.html
 
 ## 📁 Project Structure
 
-ENE expects a specific directory structure:
+ENE uses flexible test suite discovery and supports multiple directory structures:
+
+### Recommended Structure
 
 ```
 your-project/
-└── tests/                    # Test suites directory (required)
+└── tests/                    # Test suites directory
     ├── suite-name-1/
     │   ├── suite.yml        # Test configuration (required)
     │   ├── Dockerfile       # Optional service dockerfile
@@ -127,25 +132,48 @@ your-project/
         └── suite.yml
 ```
 
-### Important: Running ENE
+### Flexible Discovery
 
-**✅ Run ENE from your project root** (the directory containing `tests/`):
+ENE intelligently discovers test suites based on the path you provide:
+
+**Run all tests from project root:**
 ```bash
 cd your-project
-ene                    # Discovers tests/ automatically
+ene                    # Discovers tests/ automatically (if it exists)
 ```
 
-**❌ Don't run from inside tests/ directory**:
+**Run a specific suite:**
 ```bash
-cd your-project/tests
-ene                    # ERROR: looks for tests/tests/
+ene tests/suite-name-1          # By directory
+ene tests/suite-name-1/suite.yml # By file
 ```
 
-**✅ Use --base-dir if running from elsewhere**:
+**Run from any directory:**
 ```bash
+cd tests/suite-name-1
+ene                    # Runs the suite in current directory
+
 cd /anywhere
-ene --base-dir=/path/to/your-project
+ene /path/to/tests/suite-name-1
 ```
+
+**Nested structures work too:**
+```bash
+tests/
+  ├── integration/
+  │   ├── auth/suite.yml
+  │   └── payments/suite.yml
+  └── unit/
+      └── api/suite.yml
+
+# Run all integration tests
+ene tests/integration
+
+# Run just auth tests
+ene tests/integration/auth
+```
+
+> 📖 **Learn more:** See [Test Discovery Documentation](docs/TEST_DISCOVERY.md) for detailed discovery rules and examples.
 
 ## 🎯 Common Commands
 
@@ -156,7 +184,11 @@ ene
 # Run with verbose output
 ene --verbose
 
-# Run specific suite(s)
+# Run specific suite by path
+ene tests/my-test
+ene tests/integration/auth
+
+# Run specific suite(s) by filtering
 ene --suite=my-test
 ene --suite=test1,test2
 
@@ -168,13 +200,14 @@ ene --parallel
 
 # Validate without running
 ene dry-run
-ene dry-run tests/my-test/suite.yml
+ene dry-run tests/my-test
 
 # Generate reports
 ene --html=report.html --json=report.json
 
 # List all test suites
 ene list-suites
+ene list-suites tests/integration
 
 # Create new test suite
 ene scaffold-test my-new-test
