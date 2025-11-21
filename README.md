@@ -224,7 +224,8 @@ units:
     dockerfile: ./Dockerfile
     app_port: 8080
     healthcheck: /health
-    startup_timeout: 2m
+    build_timeout: 45s
+    startup_timeout: 30s
     env:
       - DATABASE_URL={{ postgres.dsn }}
       - API_KEY={{ api_key }}
@@ -261,13 +262,18 @@ tests:
   dockerfile: Dockerfile    # OR image: myapp:latest
   app_port: 8080
   healthcheck: /health      # Optional health endpoint
-  startup_timeout: 2m
+  build_timeout: 45s        # Time allowed for building Docker image (default: 45s)
+  startup_timeout: 30s      # Time allowed for service to become healthy (default: 30s)
   env:
     - KEY=value
   cmd:                      # Optional command override
     - ./app
     - --port=8080
 ```
+
+**Timeouts Explained:**
+- `build_timeout`: Maximum time for Docker image build (downloading dependencies, compilation)
+- `startup_timeout`: Maximum time for container startup and health check after build completes
 
 #### HTTP Mock
 ```yaml

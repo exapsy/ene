@@ -88,6 +88,10 @@
             "type": "string",
             "description": "optional startup timeout for the unit"
           },
+          "build_timeout": {
+            "type": "string",
+            "description": "optional build timeout for the unit"
+          },
           "routes": {
             "type": "array",
             "items": {

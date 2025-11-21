@@ -122,7 +122,7 @@ func (e *ContainerCreationError) UserFriendlyMessage() string {
 		suggestions = []string{
 			"Build is taking too long",
 			"Check for network issues or large dependencies",
-			"Consider increasing startup_timeout in suite.yml",
+			"Consider increasing build_timeout in suite.yml",
 		}
 	} else {
 		// For other errors, show a truncated version
@@ -211,7 +211,8 @@ const (
 )
 
 const (
-	DefaultStartupTimeout = 5 * time.Second
+	DefaultBuildTimeout   = 45 * time.Second
+	DefaultStartupTimeout = 30 * time.Second
 )
 
 type HTTPUnitConfig struct {
@@ -223,6 +224,7 @@ type HTTPUnitConfig struct {
 	HealthcheckPath string        `yaml:"healthcheck"`
 	EnvFile         string        `yaml:"env_file"`
 	Env             any           `yaml:"env"`
+	BuildTimeout    time.Duration `yaml:"build_timeout"`
 	StartupTimeout  time.Duration `yaml:"startup_timeout"`
 }
 
@@ -238,6 +240,7 @@ type HTTPUnit struct {
 	EnvFile         string
 	EnvVars         map[string]any
 	cont            testcontainers.Container
+	BuildTimeout    time.Duration
 	StartupTimeout  time.Duration
 	endpoint        string
 	verbose         bool
@@ -327,6 +330,19 @@ func New(cfg map[string]any) (e2eframe.Unit, error) {
 	envFile, _ := cfg["env_file"].(string)
 	healthcheck, _ := cfg["healthcheck"].(string)
 
+	buildTimeout, ok := cfg["build_timeout"].(time.Duration)
+	if !ok {
+		buildTimeout = DefaultBuildTimeout
+	}
+
+	if buildTimeout < 0 {
+		return nil, fmt.Errorf("http plugin requires 'build_timeout' to be greater than 0")
+	}
+
+	if buildTimeout == 0 {
+		buildTimeout = DefaultBuildTimeout
+	}
+
 	startupTimeout, ok := cfg["startup_timeout"].(time.Duration)
 	if !ok {
 		startupTimeout = DefaultStartupTimeout
@@ -382,6 +398,7 @@ func New(cfg map[string]any) (e2eframe.Unit, error) {
 		HealthcheckPath: healthcheck,
 		Dockerfile:      dockerfile,
 		Image:           image,
+		BuildTimeout:    buildTimeout,
 		StartupTimeout:  startupTimeout,
 		buildSemaphore:  buildSemaphore,
 	}, nil
@@ -481,7 +498,6 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 			buildLogWriter = io.MultiWriter(os.Stdout, &s.buildLogs)
 		}
 		logConsumers = []testcontainers.LogConsumer{
-			&testcontainers.StdoutLogConsumer{},
 			logCapture,
 		}
 	} else {
@@ -521,12 +537,10 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 			Repo:           fmt.Sprintf("ene-%s", s.name),
 			Tag:            contentHash,
 			BuildOptionsModifier: func(buildOptions *types.ImageBuildOptions) {
-				// Enable BuildKit for better performance
-				buildOptions.Version = types.BuilderBuildKit
-				buildOptions.BuildArgs = map[string]*string{
-					"BUILDKIT_PROGRESS": stringPtr("plain"),
-					"DOCKER_BUILDKIT":   stringPtr("1"),
-				}
+				// Use legacy builder for proper log capture
+				// BuildKit doesn't stream logs to BuildLogWriter properly
+				buildOptions.Version = types.BuilderV1
+				buildOptions.BuildArgs = map[string]*string{}
 
 				// Add no-cache option for debugging only
 				if opts.Debug {
@@ -606,7 +620,11 @@ func (s *HTTPUnit) Start(ctx context.Context, opts *e2eframe.UnitStartOptions) e
 		fmt.Sprintf("building and starting HTTP unit %s on port %d", s.Name(), s.Port),
 	)
 
-	cont, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	// Create a context with build timeout for the container creation/build phase
+	buildCtx, buildCancel := context.WithTimeout(ctx, s.BuildTimeout)
+	defer buildCancel()
+
+	cont, err := testcontainers.GenericContainer(buildCtx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
@@ -870,6 +888,7 @@ func UnmarshallUnit(node *yaml.Node) (e2eframe.Unit, error) {
 		"healthcheck":     config.HealthcheckPath,
 		"env_file":        config.EnvFile,
 		"env":             config.Env,
+		"build_timeout":   config.BuildTimeout,
 		"startup_timeout": config.StartupTimeout,
 	})
 	if err != nil {

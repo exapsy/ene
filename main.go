@@ -503,7 +503,8 @@ func ScaffoldTest(testName string, templates []string) error {
     dockerfile: Dockerfile
     app_port: 8080
     healthcheck: /v1/health
-    startup_timeout: 4m
+    build_timeout: 45s
+    startup_timeout: 30s
     env_file: .env
     env:
       - DB_DSN={{ mongodb.dsn }}`
