@@ -214,6 +214,9 @@
               },
               {
                 "const": "postgres"
+              },
+              {
+                "const": "mongo"
               }
             ]
           },
@@ -231,6 +234,39 @@
           "query": {
             "type": "string",
             "description": "SQL query to execute (postgres test only)"
+          },
+          "collection": {
+            "type": "string",
+            "description": "MongoDB collection name (mongo test only)"
+          },
+          "filter": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "MongoDB filter as JSON string"
+              },
+              {
+                "type": "object",
+                "description": "MongoDB filter as YAML object"
+              }
+            ],
+            "description": "MongoDB find filter (mongo test only)"
+          },
+          "pipeline": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "MongoDB aggregation pipeline as JSON string"
+              },
+              {
+                "type": "array",
+                "description": "MongoDB aggregation pipeline as YAML array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            ],
+            "description": "MongoDB aggregation pipeline (mongo test only)"
           },
           "request": {
             "type": "object",
@@ -734,11 +770,44 @@
               },
               "not_contains": {
                 "type": "array",
-                "description": "Assert that results do not contain these rows",
+                "description": "Assert results don't contain these rows (postgres test only)",
                 "items": {
                   "type": "object",
                   "additionalProperties": true
                 }
+              },
+              "document_count": {
+                "type": "integer",
+                "description": "Assert exact document count (mongo test only)"
+              },
+              "min_document_count": {
+                "type": "integer",
+                "description": "Assert minimum document count (mongo test only)"
+              },
+              "max_document_count": {
+                "type": "integer",
+                "description": "Assert maximum document count (mongo test only)"
+              },
+              "no_documents": {
+                "type": "boolean",
+                "description": "Assert query returns zero documents (mongo test only)"
+              },
+              "collection_exists": {
+                "type": "string",
+                "description": "Verify a MongoDB collection exists (mongo test only)"
+              },
+              "documents": {
+                "type": "array",
+                "description": "Assert exact document data matches (mongo test only)",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "field_values": {
+                "type": "object",
+                "description": "Assert field values for single document (mongo test only)",
+                "additionalProperties": true
               }
             }
           }
@@ -785,6 +854,18 @@
             },
             "then": {
               "required": ["name", "kind", "request", "expect"]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "mongo"
+                }
+              }
+            },
+            "then": {
+              "required": ["name", "kind", "expect"]
             }
           }
         ]
