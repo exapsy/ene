@@ -655,7 +655,7 @@ Contributions are welcome! Please:
 
 ## 📄 License
 
-[Add your license here]
+[MIT](LICENSE)
 
 ## 🆘 Support
 
@@ -674,4 +674,4 @@ Contributions are welcome! Please:
 
 ---
 
-**Made with ❤️ for better integration testing**
+**Made with ❤️ for better end-to-end testing**
