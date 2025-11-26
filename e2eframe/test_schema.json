@@ -208,25 +208,8 @@
           },
           "kind": {
             "type": "string",
-            "description": "Type of test to execute",
-            "oneOf": [
-              {
-                "const": "http",
-                "description": "HTTP API test - executes HTTP requests and validates responses"
-              },
-              {
-                "const": "minio",
-                "description": "MinIO storage test - verifies object storage state and file existence"
-              },
-              {
-                "const": "postgres",
-                "description": "PostgreSQL database test - executes SQL queries and validates results"
-              },
-              {
-                "const": "mongo",
-                "description": "MongoDB database test - executes find queries or aggregation pipelines and validates documents"
-              }
-            ]
+            "description": "Type of test to execute: 'http' (HTTP API test), 'postgres' (PostgreSQL database test), 'mongo' (MongoDB database test), 'minio' (MinIO storage test)",
+            "enum": ["http", "minio", "postgres", "mongo"]
           },
           "target": {
             "type": "string",
