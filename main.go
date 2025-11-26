@@ -19,6 +19,7 @@ import (
 	_ "github.com/exapsy/ene/plugins/httpunit"
 	_ "github.com/exapsy/ene/plugins/miniotest"
 	_ "github.com/exapsy/ene/plugins/miniounit"
+	_ "github.com/exapsy/ene/plugins/mongotest"
 	_ "github.com/exapsy/ene/plugins/mongounit"
 	_ "github.com/exapsy/ene/plugins/postgrestest"
 	_ "github.com/exapsy/ene/plugins/postgresunit"
