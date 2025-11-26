@@ -40,7 +40,7 @@ Detailed reference for test suite configuration files (`suite.yml`).
 **Covers:**
 - Complete YAML schema documentation
 - All unit types (HTTP, MongoDB, PostgreSQL, MinIO, etc.)
-- Test types and assertions
+- All test types (HTTP, PostgreSQL, MongoDB, MinIO)
 - Fixtures and variable interpolation
 - Size and duration formats
 - Complete examples with explanations
@@ -50,6 +50,37 @@ Detailed reference for test suite configuration files (`suite.yml`).
 - Need to understand specific configuration options
 - Want to know what assertions are available
 - Need to reference service variables
+
+### 🗄️ [PostgreSQL Testing Guide](POSTGRES_TESTS.md)
+Complete guide for PostgreSQL database testing.
+
+**Covers:**
+- SQL query testing
+- Row count assertions
+- Exact row data verification
+- Table existence checks
+- Fixture interpolation in queries
+
+**Use this when you:**
+- Testing PostgreSQL databases
+- Validating SQL query results
+- Verifying database state after operations
+
+### 🍃 [MongoDB Testing Guide](MONGO_QUICK_REFERENCE.md)
+Complete guide for MongoDB database testing.
+
+**Covers:**
+- Find operations and aggregation pipelines
+- Document count assertions
+- Exact document data verification
+- Collection existence checks
+- Both JSON and YAML query formats
+- Fixture interpolation in queries
+
+**Use this when you:**
+- Testing MongoDB databases
+- Validating NoSQL query results
+- Verifying database state after operations
 
 ## Quick Start
 
@@ -149,6 +180,8 @@ ene --suite=integration --parallel
 
 ### ✅ Rich Assertions
 - JSONPath-based body assertions
+- SQL query result validation (PostgreSQL)
+- NoSQL query result validation (MongoDB)
 - Header assertions with regex support
 - MinIO state verification
 - Type checking and comparisons

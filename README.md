@@ -13,9 +13,10 @@ ENE is a powerful Docker-based end-to-end testing framework that spins up comple
 
 - **🐳 Docker-Native**: Automatically manages containers for services, databases, and mocks
 - **🔧 Multiple Service Types**: HTTP servers, MongoDB, PostgreSQL, MinIO, HTTP mocks
+- **🗄️ Database Testing**: First-class support for PostgreSQL and MongoDB query testing
 - **📝 Simple YAML Configuration**: Declarative test definitions with fixtures and assertions
 - **🔄 Variable Interpolation**: Reuse values across tests with fixtures and service variables
-- **📊 Rich Assertions**: JSON path queries, header checks, MinIO state verification
+- **📊 Rich Assertions**: JSON path queries, SQL/NoSQL result validation, header checks, MinIO state verification
 - **🎯 Test Isolation**: Each suite runs in its own Docker network
 - **📈 Detailed Reports**: HTML and JSON output formats
 - **⚡ Parallel Execution**: Run multiple test suites concurrently
@@ -426,6 +427,104 @@ Access service connection details:
 {{ app.host }}
 {{ app.port }}
 {{ app.endpoint }}         # http://app:8080
+```
+
+### Supported Test Types
+
+ENE supports multiple test types for different testing scenarios:
+
+#### HTTP Tests (`kind: http`)
+Test HTTP APIs with full request/response validation:
+
+```yaml
+tests:
+  - name: create user
+    kind: http
+    request:
+      method: POST
+      path: /api/users
+      headers:
+        Content-Type: application/json
+      body:
+        name: John Doe
+        email: john@example.com
+    expect:
+      status_code: 201
+      body_asserts:
+        id:
+          present: true
+        name: John Doe
+```
+
+#### PostgreSQL Tests (`kind: postgres`)
+Execute SQL queries and validate results:
+
+```yaml
+tests:
+  - name: verify user count
+    kind: postgres
+    query: "SELECT COUNT(*) as count FROM users WHERE status = 'active'"
+    expect:
+      row_count: 1
+      column_values:
+        count: 5
+  
+  - name: check user data
+    kind: postgres
+    query: "SELECT id, name, email FROM users WHERE id = 1"
+    expect:
+      rows:
+        - id: 1
+          name: "Alice"
+          email: "alice@example.com"
+```
+
+> 📖 See [POSTGRES_TESTS.md](docs/POSTGRES_TESTS.md) for complete PostgreSQL testing guide
+
+#### MongoDB Tests (`kind: mongo`)
+Query MongoDB collections with find operations or aggregation pipelines:
+
+```yaml
+tests:
+  - name: check active users
+    kind: mongo
+    collection: users
+    filter:
+      status: active
+    expect:
+      document_count: 5
+  
+  - name: aggregate by role
+    kind: mongo
+    collection: users
+    pipeline:
+      - $group:
+          _id: "$role"
+          count: { $sum: 1 }
+    expect:
+      min_document_count: 2
+```
+
+> 📖 See [MONGO_QUICK_REFERENCE.md](docs/MONGO_QUICK_REFERENCE.md) for complete MongoDB testing guide
+
+#### MinIO Tests (`kind: minio`)
+Verify object storage state:
+
+```yaml
+tests:
+  - name: verify upload
+    kind: minio
+    verify_state:
+      files_exist:
+        - uploads/file1.txt
+      bucket_counts:
+        uploads: 2
+      required:
+        buckets:
+          uploads:
+            - path: file1.txt
+              min_size: 10B
+              max_size: 10MB
 ```
 
 ### Assertions

@@ -9,6 +9,10 @@ Complete reference for ENE test suite configuration files (`suite.yml`).
 - [Fixtures](#fixtures)
 - [Units](#units)
 - [Tests](#tests)
+  - [Test Type: `http`](#test-type-http)
+  - [Test Type: `postgres`](#test-type-postgres)
+  - [Test Type: `mongo`](#test-type-mongo)
+  - [Test Type: `minio`](#test-type-minio)
 - [Assertions](#assertions)
 - [Variable Interpolation](#variable-interpolation)
 
@@ -477,6 +481,350 @@ HTTP request/response test.
 - `status_code` (optional): Expected HTTP status code (default: 200)
 - `body_asserts` (optional): Array of body assertions (see [Body Assertions](#body-assertions))
 - `header_asserts` (optional): Array of header assertions (see [Header Assertions](#header-assertions))
+
+### Test Type: `postgres`
+
+PostgreSQL database query test.
+
+```yaml
+- name: "Check user count"
+  kind: postgres
+  query: "SELECT COUNT(*) as count FROM users WHERE status = 'active'"
+  expect:
+    row_count: 1
+    column_values:
+      count: 5
+```
+
+#### Test Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique test identifier |
+| `kind` | string | Yes | Must be `"postgres"` |
+| `query` | string | Conditional | SQL query to execute (required unless only checking `table_exists`) |
+| `expect` | object | Yes | Expectations to verify |
+| `target` | string | Optional | Override suite-level target unit |
+| `debug` | boolean | Optional | Enable debug output for this test |
+
+#### Expectation Options
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `table_exists` | string | Verify a table exists |
+| `row_count` | integer | Assert exact row count |
+| `min_row_count` | integer | Assert minimum row count |
+| `max_row_count` | integer | Assert maximum row count |
+| `no_rows` | boolean | Assert query returns zero rows |
+| `rows` | array[object] | Assert exact row data matches |
+| `column_values` | object | Assert column values (single row only) |
+| `contains` | array[object] | Assert results contain these rows |
+| `not_contains` | array[object] | Assert results don't contain these rows |
+
+#### Examples
+
+**Table Existence Check:**
+```yaml
+- name: "Verify users table exists"
+  kind: postgres
+  expect:
+    table_exists: "users"
+```
+
+**Row Count Assertions:**
+```yaml
+# Exact count
+- name: "Verify 5 active users"
+  kind: postgres
+  query: "SELECT * FROM users WHERE status = 'active'"
+  expect:
+    row_count: 5
+
+# Range
+- name: "Verify user count in range"
+  kind: postgres
+  query: "SELECT * FROM users"
+  expect:
+    min_row_count: 1
+    max_row_count: 100
+
+# No rows
+- name: "No orphaned orders"
+  kind: postgres
+  query: "SELECT * FROM orders WHERE user_id NOT IN (SELECT id FROM users)"
+  expect:
+    no_rows: true
+```
+
+**Exact Row Data:**
+```yaml
+- name: "Verify user details"
+  kind: postgres
+  query: "SELECT id, name, email FROM users WHERE id = 1"
+  expect:
+    row_count: 1
+    rows:
+      - id: 1
+        name: "Alice"
+        email: "alice@example.com"
+```
+
+**Column Values (Single Row):**
+```yaml
+- name: "Check aggregate values"
+  kind: postgres
+  query: "SELECT COUNT(*) as total, SUM(amount) as sum FROM orders"
+  expect:
+    column_values:
+      total: 42
+      sum: 1500
+```
+
+**Contains/Not Contains:**
+```yaml
+# Verify specific rows exist
+- name: "Admin users exist"
+  kind: postgres
+  query: "SELECT email, role FROM users WHERE role = 'admin'"
+  expect:
+    contains:
+      - email: "admin@example.com"
+        role: "admin"
+
+# Verify specific rows don't exist
+- name: "Deleted user is gone"
+  kind: postgres
+  query: "SELECT * FROM users"
+  expect:
+    not_contains:
+      - email: "deleted@example.com"
+```
+
+**Fixture Interpolation:**
+```yaml
+fixtures:
+  - user_id: 123
+
+tests:
+  - name: "Query specific user"
+    kind: postgres
+    query: "SELECT * FROM users WHERE id = {{ user_id }}"
+    expect:
+      row_count: 1
+```
+
+> 📖 **More details:** See [PostgreSQL Test Plugin README](../plugins/postgrestest/README.md) and [POSTGRES_TESTS.md](./POSTGRES_TESTS.md)
+
+### Test Type: `mongo`
+
+MongoDB database query test.
+
+```yaml
+- name: "Check active users"
+  kind: mongo
+  collection: users
+  filter: '{"status": "active"}'
+  expect:
+    document_count: 5
+```
+
+#### Test Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique test identifier |
+| `kind` | string | Yes | Must be `"mongo"` |
+| `collection` | string | Conditional | MongoDB collection name (required unless only checking `collection_exists`) |
+| `filter` | string/object | Optional | MongoDB filter for find operations (JSON string or YAML structure) |
+| `pipeline` | string/array | Optional | MongoDB aggregation pipeline (JSON string or YAML array) |
+| `expect` | object | Yes | Expectations to verify |
+| `target` | string | Optional | Override suite-level target unit |
+| `debug` | boolean | Optional | Enable debug output for this test |
+
+#### Expectation Options
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `collection_exists` | string | Verify a collection exists |
+| `document_count` | integer | Assert exact document count |
+| `min_document_count` | integer | Assert minimum document count |
+| `max_document_count` | integer | Assert maximum document count |
+| `no_documents` | boolean | Assert query returns zero documents |
+| `documents` | array[object] | Assert exact document data matches |
+| `field_values` | object | Assert field values (single document only) |
+| `contains` | array[object] | Assert results contain these documents |
+| `not_contains` | array[object] | Assert results don't contain these documents |
+
+#### Query Formats
+
+The plugin supports both **JSON strings** and **YAML structures**.
+
+**Filter (Find) Operations:**
+```yaml
+# JSON String Format
+- name: "Find active users"
+  kind: mongo
+  collection: users
+  filter: '{"status": "active", "age": {"$gte": 18}}'
+  expect:
+    min_document_count: 1
+
+# YAML Structure Format
+- name: "Find active users"
+  kind: mongo
+  collection: users
+  filter:
+    status: active
+    age:
+      $gte: 18
+  expect:
+    min_document_count: 1
+```
+
+**Pipeline (Aggregation) Operations:**
+```yaml
+# JSON String Format
+- name: "Aggregate by status"
+  kind: mongo
+  collection: orders
+  pipeline: '[{"$group": {"_id": "$status", "count": {"$sum": 1}}}]'
+  expect:
+    min_document_count: 1
+
+# YAML Array Format
+- name: "Aggregate by status"
+  kind: mongo
+  collection: orders
+  pipeline:
+    - $match:
+        year: 2024
+    - $group:
+        _id: "$status"
+        count: { $sum: 1 }
+    - $sort:
+        count: -1
+  expect:
+    min_document_count: 1
+```
+
+#### Examples
+
+**Collection Existence Check:**
+```yaml
+- name: "Verify users collection exists"
+  kind: mongo
+  expect:
+    collection_exists: "users"
+```
+
+**Document Count Assertions:**
+```yaml
+# Exact count
+- name: "Verify 5 users"
+  kind: mongo
+  collection: users
+  filter: '{}'
+  expect:
+    document_count: 5
+
+# Range
+- name: "Verify user count in range"
+  kind: mongo
+  collection: users
+  filter: '{}'
+  expect:
+    min_document_count: 1
+    max_document_count: 100
+
+# No documents
+- name: "No orphaned records"
+  kind: mongo
+  collection: orders
+  filter:
+    user_id:
+      $nin: [1, 2, 3]
+  expect:
+    no_documents: true
+```
+
+**Exact Document Data:**
+```yaml
+- name: "Verify user details"
+  kind: mongo
+  collection: users
+  filter:
+    _id: 1
+  expect:
+    document_count: 1
+    documents:
+      - _id: 1
+        name: "Alice"
+        email: "alice@example.com"
+```
+
+**Field Values (Single Document):**
+```yaml
+- name: "Check aggregate values"
+  kind: mongo
+  collection: orders
+  pipeline:
+    - $group:
+        _id: null
+        total: { $sum: 1 }
+        total_amount: { $sum: "$amount" }
+  expect:
+    field_values:
+      total: 42
+      total_amount: 1500
+```
+
+**Contains/Not Contains:**
+```yaml
+# Verify specific documents exist
+- name: "Admin users exist"
+  kind: mongo
+  collection: users
+  filter:
+    role: admin
+  expect:
+    contains:
+      - email: "admin@example.com"
+        role: "admin"
+
+# Verify specific documents don't exist
+- name: "Deleted user is gone"
+  kind: mongo
+  collection: users
+  filter: '{}'
+  expect:
+    not_contains:
+      - email: "deleted@example.com"
+```
+
+**Fixture Interpolation:**
+```yaml
+fixtures:
+  - user_id: "123"
+  - user_email: "test@example.com"
+
+tests:
+  - name: "Query specific user by ID"
+    kind: mongo
+    collection: users
+    filter: '{"_id": "{{ user_id }}"}'
+    expect:
+      document_count: 1
+      
+  - name: "Query by email"
+    kind: mongo
+    collection: users
+    filter:
+      email: "{{ user_email }}"
+    expect:
+      document_count: 1
+```
+
+> 📖 **More details:** See [MongoDB Test Plugin README](../plugins/mongotest/README.md) and [MONGO_QUICK_REFERENCE.md](./MONGO_QUICK_REFERENCE.md)
 
 ### Test Type: `minio`
 

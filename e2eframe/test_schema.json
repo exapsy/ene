@@ -1,5 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ENE Test Suite Configuration",
+  "description": "Configuration schema for ENE (End-to-End) test suites. Supports multiple test types: HTTP API testing, PostgreSQL database testing, MongoDB database testing, and MinIO object storage testing. Each suite can define fixtures, service units (databases, mocks, applications), and test cases with rich assertions.",
   "type": "object",
   "properties": {
     "kind": {
@@ -52,6 +54,7 @@
           },
           "kind": {
             "type": "string",
+            "description": "Type of service unit: 'http' (application service), 'httpmock' (mock HTTP server), 'mongo' (MongoDB database), 'postgres' (PostgreSQL database), 'minio' (object storage)",
             "enum": ["mongo", "http", "postgres", "httpmock", "minio"]
           },
           "image": {
@@ -152,19 +155,19 @@
           },
           "database": {
             "type": "string",
-            "description": "PostgreSQL database name"
+            "description": "Database name (for PostgreSQL and MongoDB units)"
           },
           "user": {
             "type": "string",
-            "description": "PostgreSQL user name"
+            "description": "Database user name (for PostgreSQL and MongoDB units)"
           },
           "password": {
             "type": "string",
-            "description": "PostgreSQL password"
+            "description": "Database password (for PostgreSQL and MongoDB units)"
           },
           "migrations": {
             "type": "string",
-            "description": "Path to the migrations file (MongoDB only)"
+            "description": "Path to migrations: JavaScript file for MongoDB (e.g., 'db.js'), or directory containing .sql files for PostgreSQL (e.g., './migrations')"
           }
         },
         "allOf": [
@@ -205,18 +208,23 @@
           },
           "kind": {
             "type": "string",
+            "description": "Type of test to execute",
             "oneOf": [
               {
-                "const": "http"
+                "const": "http",
+                "description": "HTTP API test - executes HTTP requests and validates responses"
               },
               {
-                "const": "minio"
+                "const": "minio",
+                "description": "MinIO storage test - verifies object storage state and file existence"
               },
               {
-                "const": "postgres"
+                "const": "postgres",
+                "description": "PostgreSQL database test - executes SQL queries and validates results"
               },
               {
-                "const": "mongo"
+                "const": "mongo",
+                "description": "MongoDB database test - executes find queries or aggregation pipelines and validates documents"
               }
             ]
           },
@@ -729,27 +737,27 @@
               },
               "row_count": {
                 "type": "integer",
-                "description": "Expected exact number of rows returned by the query"
+                "description": "Expected exact number of rows returned by the SQL query (postgres test only)"
               },
               "min_row_count": {
                 "type": "integer",
-                "description": "Minimum number of rows expected"
+                "description": "Minimum number of rows expected from SQL query (postgres test only)"
               },
               "max_row_count": {
                 "type": "integer",
-                "description": "Maximum number of rows expected"
+                "description": "Maximum number of rows expected from SQL query (postgres test only)"
               },
               "no_rows": {
                 "type": "boolean",
-                "description": "Assert that the query returns no rows"
+                "description": "Assert that the SQL query returns no rows (postgres test only)"
               },
               "table_exists": {
                 "type": "string",
-                "description": "Check if a table exists in the database"
+                "description": "Verify that a PostgreSQL table exists in the database (postgres test only)"
               },
               "rows": {
                 "type": "array",
-                "description": "Expected exact row data",
+                "description": "Assert exact row data matches from SQL query results (postgres test only)",
                 "items": {
                   "type": "object",
                   "additionalProperties": true
@@ -757,12 +765,12 @@
               },
               "column_values": {
                 "type": "object",
-                "description": "Expected column values for single-row results",
+                "description": "Assert specific column values for single-row SQL query results (postgres test only)",
                 "additionalProperties": true
               },
               "contains": {
                 "type": "array",
-                "description": "Assert that results contain these rows (partial match)",
+                "description": "Assert that SQL query results contain these rows with partial match (postgres test) or MongoDB query results contain these documents (mongo test)",
                 "items": {
                   "type": "object",
                   "additionalProperties": true
@@ -770,7 +778,7 @@
               },
               "not_contains": {
                 "type": "array",
-                "description": "Assert results don't contain these rows (postgres test only)",
+                "description": "Assert SQL query results don't contain these rows (postgres test) or MongoDB query results don't contain these documents (mongo test)",
                 "items": {
                   "type": "object",
                   "additionalProperties": true

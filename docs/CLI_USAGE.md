@@ -671,6 +671,74 @@ Runs PostgreSQL database with migrations.
         contains: /api/users/
 ```
 
+#### PostgreSQL Test
+
+```yaml
+- name: verify user count
+  kind: postgres
+  query: "SELECT COUNT(*) as count FROM users WHERE status = 'active'"
+  expect:
+    row_count: 1
+    column_values:
+      count: 5
+
+- name: check user data
+  kind: postgres
+  query: "SELECT id, name, email FROM users WHERE id = 1"
+  expect:
+    rows:
+      - id: 1
+        name: "Alice"
+        email: "alice@example.com"
+
+- name: no orphaned orders
+  kind: postgres
+  query: "SELECT * FROM orders WHERE user_id NOT IN (SELECT id FROM users)"
+  expect:
+    no_rows: true
+```
+
+See [POSTGRES_TESTS.md](./POSTGRES_TESTS.md) for more examples.
+
+#### MongoDB Test
+
+```yaml
+- name: check active users
+  kind: mongo
+  collection: users
+  filter:
+    status: active
+    age:
+      $gte: 18
+  expect:
+    document_count: 5
+
+- name: aggregate by role
+  kind: mongo
+  collection: users
+  pipeline:
+    - $group:
+        _id: "$role"
+        count: { $sum: 1 }
+    - $sort:
+        count: -1
+  expect:
+    min_document_count: 2
+
+- name: verify user details
+  kind: mongo
+  collection: users
+  filter:
+    _id: 1
+  expect:
+    documents:
+      - _id: 1
+        name: "Alice"
+        email: "alice@example.com"
+```
+
+See [MONGO_QUICK_REFERENCE.md](./MONGO_QUICK_REFERENCE.md) for more examples.
+
 #### MinIO Test
 
 ```yaml
