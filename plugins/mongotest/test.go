@@ -94,11 +94,21 @@ func (t *TestSuiteTest) Initialize(testSuite e2eframe.TestSuite) error {
 	}
 
 	// Get MongoDB connection details from the target unit
-	dsn, err := target.Get("dsn")
-	if err != nil {
-		return fmt.Errorf("failed to get mongodb DSN from unit '%s': %w (hint: target must be a mongo unit)", target.Name(), err)
+	// Use ExternalEndpoint for host-based test execution (tests run outside Docker)
+	externalEndpoint := target.ExternalEndpoint()
+	if externalEndpoint == "" {
+		return fmt.Errorf("failed to get mongodb external endpoint from unit '%s' (hint: target must be a mongo unit)", target.Name())
 	}
-	t.MongoEndpoint = dsn
+
+	// Get the database name from the unit
+	database, err := target.Get("database")
+	if err != nil {
+		// Default to "test" if database variable not available
+		database = "test"
+	}
+
+	// Construct the full DSN with database name
+	t.MongoEndpoint = fmt.Sprintf("%s/%s", externalEndpoint, database)
 
 	return nil
 }

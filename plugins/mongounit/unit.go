@@ -40,6 +40,7 @@ type MongoUnit struct {
 	exposedPort       int
 	envFile           string
 	appPort           int
+	database          string
 	startupTimeout    time.Duration
 	cmd               []string
 	EnvVars           map[string]any
@@ -365,14 +366,23 @@ func (m *MongoUnit) Get(variable string) (string, error) {
 		exposedPort := fmt.Sprintf("%d", m.exposedPort)
 
 		return exposedPort, nil
+	case "database":
+		if m.database == "" {
+			return "test", nil
+		}
+		return m.database, nil
 	case "dsn":
 		if m.container == nil {
 			return "", fmt.Errorf("mongo container not started")
 		}
 
 		host := m.serviceName
+		dbName := m.database
+		if dbName == "" {
+			dbName = "test"
+		}
 
-		return fmt.Sprintf("mongodb://%s:%d/test", host, m.appPort), nil
+		return fmt.Sprintf("mongodb://%s:%d/%s", host, m.appPort, dbName), nil
 	}
 
 	return "", fmt.Errorf("variable %s not found", variable)
@@ -398,6 +408,8 @@ func (m *MongoUnit) UnmarshalYAML(node *yaml.Node) error {
 	m.MigrationFilePath = migrations
 	name, _ := cfg["name"].(string)
 	m.serviceName = name
+	database, _ := cfg["database"].(string)
+	m.database = database
 
 	return nil
 }
